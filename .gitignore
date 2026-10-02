@@ -1,0 +1,11 @@
+node_modules/
+tools/.cert/
+.DS_Store
+
+# Data from your own discs. Never commit or host it.
+WIPEOUT/
+WIPEOUT2/
+
+# Your own music files
+music/*
+!music/README.md

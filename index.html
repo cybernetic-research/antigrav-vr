@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+		<title>ANTIGRAV VR</title>
+		<style>
+			html,
+			body {
+				margin: 0;
+				height: 100%;
+				background: #02040f;
+				overflow: hidden;
+				font-family: 'Segoe UI', Helvetica, Arial, sans-serif;
+			}
+			#app canvas {
+				display: block;
+			}
+			#vr-slot button {
+				font-weight: bold;
+				letter-spacing: 0.05em;
+			}
+			#hint {
+				position: absolute;
+				top: 10px;
+				left: 12px;
+				right: 12px;
+				color: #8aa0bf;
+				font-size: 12px;
+				pointer-events: none;
+			}
+			#music-btn {
+				pointer-events: auto;
+				cursor: pointer;
+				margin-left: 12px;
+				padding: 3px 10px;
+				border: 1px solid #2ad1ff;
+				border-radius: 10px;
+				color: #2ad1ff;
+				white-space: nowrap;
+			}
+		</style>
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+					"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+				}
+			}
+		</script>
+	</head>
+	<body>
+		<div id="app"></div>
+		<div id="vr-slot"></div>
+		<div id="hint">
+			Click the menu with the mouse. Race with the keyboard or a gamepad, or press ENTER VR.
+			<label id="music-btn">&#9835; Your music<input id="music-files" type="file" accept="audio/*" multiple hidden /></label>
+		</div>
+		<script type="module" src="./src/main.js"></script>
+	</body>
+</html>

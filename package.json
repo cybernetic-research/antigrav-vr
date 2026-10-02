@@ -1,0 +1,14 @@
+{
+  "name": "antigrav-vr",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "WebXR anti-gravity racer for Quest and desktop browsers",
+  "scripts": {
+    "serve": "node tools/serve.mjs",
+    "serve:https": "node tools/serve.mjs --https"
+  },
+  "devDependencies": {
+    "three": "0.186.1"
+  }
+}
