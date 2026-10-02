@@ -178,12 +178,12 @@ function updateTitleShip() {
 	const rot = titleShip ? titleShip.rotation.y : 0;
 	if (titleShip) {
 		titleGroup.remove(titleShip);
-		titleShip.traverse((o) => {
-			o.geometry?.dispose();
-			o.material?.dispose();
-		});
+		// add-on models share geometry/materials between builds: leave those alone
+		if (!titleShip.userData.shared) disposeObject(titleShip);
 	}
-	titleShip = buildShip(TEAMS[settings.team] || TEAMS[0]);
+	const team = TEAMS[settings.team] || TEAMS[0];
+	titleShip = buildShip(team);
+	titleShip.userData.shared = !!team.buildModel;
 	titleShip.scale.setScalar(0.4);
 	titleShip.position.set(0, -0.78, -3.7);
 	titleShip.rotation.y = rot;
@@ -951,6 +951,10 @@ function maybeAutostart() {
 	if (params.has('opponents')) settings.opponents = Number(params.get('opponents'));
 	startRace();
 }
+// Errors show up in the menu's status line, so problems are visible on a headset too
+addEventListener('error', (e) => window.antigrav?.setStatus(`Error: ${e.message}`));
+addEventListener('unhandledrejection', (e) => window.antigrav?.setStatus(`Error: ${e.reason?.message || e.reason}`));
+
 // --- Add-on API ------------------------------------------------------------------------------
 // Add-ons (e.g. a mode that reads data from the player's own disc image) load
 // after this module and extend the game through window.antigrav.
@@ -959,13 +963,27 @@ window.antigrav = {
 	settings,
 	audio,
 	// [{name, blurb, load: async () => track}] where track = {name, path, group, sky, fog, background}
-	addTracks(list) {
-		trackList = trackList.concat(list.map((t) => ({ kind: 'mod', ...t })));
+	// {replace: true} makes these the only tracks in the menu
+	addTracks(list, { replace = false } = {}) {
+		const entries = list.map((t) => ({ kind: 'mod', ...t }));
+		trackList = replace ? entries : trackList.concat(entries);
+		if (settings.track >= trackList.length) settings.track = 0;
 		menuPanel.redraw();
 	},
 	// teams with {id, name, ship, blurb, stats, liveries, buildModel(liveryIndex, {cockpit, number})}
-	addTeams(list) {
+	// {replace: true} makes these the only teams in the menu
+	addTeams(list, { replace = false } = {}) {
+		if (replace) TEAMS.splice(0, TEAMS.length);
 		TEAMS.push(...list);
+		if (settings.team >= TEAMS.length) settings.team = 0;
+		updateTitleShip();
+		menuPanel.redraw();
+	},
+	// select menu entries by index
+	select({ track, team } = {}) {
+		if (track !== undefined) settings.track = Math.max(0, Math.min(trackList.length - 1, track));
+		if (team !== undefined) settings.team = Math.max(0, Math.min(TEAMS.length - 1, team));
+		updateTitleShip();
 		menuPanel.redraw();
 	},
 	addMusic(list) {
@@ -993,6 +1011,11 @@ window.antigrav = {
 window.dispatchEvent(new Event('antigrav-ready'));
 
 window.__game = { get state() { return state; }, get race() { return race; }, settings, startRace, showTitle, renderer, audio, updateTitleShip,
+	// press menu buttons the way a player would (tests)
+	menuClick: (id) => onPanelClick(menuPanel, id),
+	resultsClick: (id) => race && onPanelClick(race.resultsPanel, id),
+	get status() { return psxStatus; },
+	get loadingMessage() { return loadingMessage; },
 	// Lines up every team's ship in front of the title camera (for screenshots)
 	debugShips() {
 		titleGroup.remove(menuPanel.mesh, helpPanel.mesh, logoPanel.mesh, titleShip);
