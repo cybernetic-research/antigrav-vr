@@ -16,7 +16,10 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// Serves the game folder, or another folder given with --root <dir> (used by add-ons
+// that include this repo as a submodule)
+const rootArg = process.argv.indexOf('--root');
+const root = rootArg > 0 ? path.resolve(process.argv[rootArg + 1]) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const useHttps = process.argv.includes('--https');
 const port = Number(process.env.PORT) || (useHttps ? 8443 : 8080);
 
@@ -69,7 +72,7 @@ function lanAddresses() {
 }
 
 if (useHttps) {
-	const certDir = path.join(root, 'tools', '.cert');
+	const certDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '.cert');
 	const key = path.join(certDir, 'key.pem');
 	const cert = path.join(certDir, 'cert.pem');
 	if (!fs.existsSync(key) || !fs.existsSync(cert)) {
