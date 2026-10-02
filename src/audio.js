@@ -105,6 +105,7 @@ export class Audio {
 		if (!on) {
 			for (const g of [this.engGain.gain, this.wind.g.gain, this.scrape.g.gain, this.rivalGain.gain]) g.setTargetAtTime(0, t, 0.1);
 			for (const l of Object.values(this.loops)) l.gain.gain.setTargetAtTime(0, t, 0.1);
+			this.setRecharging(false);
 		}
 	}
 
@@ -275,7 +276,7 @@ export class Audio {
 	_loadVoices() {
 		const ids = ['three', 'two', 'one', 'go', 'rockets', 'missile', 'mines', 'autopilot', 'autopilot_on', 'autopilot_off',
 			'contender_eliminated', 'opponent_destroyed', 'player_eliminated', 'shield_critical', 'missile_incoming',
-			'final_lap', 'lap_two', 'lap_three', 'lap_four', 'race_complete', 'wrong_way'];
+			'final_lap', 'lap_two', 'lap_three', 'lap_four', 'race_complete', 'wrong_way', 'recharging'];
 		this.voices = {};
 		this.voiceQueue = [];
 		this.voiceBusyUntil = 0;
@@ -406,6 +407,107 @@ export class Audio {
 		o.connect(og).connect(p);
 		o.start(t);
 		o.stop(t + 0.65);
+	}
+
+	// one gatling round: a short crack with a low thump
+	gunShot(strength = 1, pan = 0) {
+		if (!this.ctx) return;
+		const ctx = this.ctx;
+		const t = ctx.currentTime;
+		const p = ctx.createStereoPanner();
+		p.pan.value = Math.max(-1, Math.min(1, pan));
+		p.connect(this.master);
+		const src = ctx.createBufferSource();
+		src.buffer = this.noiseBuf;
+		const f = ctx.createBiquadFilter();
+		f.type = 'bandpass';
+		f.frequency.value = 2200 + Math.random() * 600;
+		f.Q.value = 1.2;
+		const g = ctx.createGain();
+		g.gain.setValueAtTime(0.32 * strength, t);
+		g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+		src.connect(f).connect(g).connect(p);
+		src.start(t, Math.random());
+		src.stop(t + 0.07);
+		const o = ctx.createOscillator();
+		o.frequency.setValueAtTime(140, t);
+		o.frequency.exponentialRampToValueAtTime(60, t + 0.05);
+		const og = ctx.createGain();
+		og.gain.setValueAtTime(0.25 * strength, t);
+		og.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+		o.connect(og).connect(p);
+		o.start(t);
+		o.stop(t + 0.07);
+	}
+
+	// a round striking a hull
+	tick(strength = 1, pan = 0) {
+		if (!this.ctx) return;
+		const o = this.ctx.createOscillator();
+		o.type = 'square';
+		o.frequency.value = 1800 + Math.random() * 800;
+		const g = this.ctx.createGain();
+		const t = this.ctx.currentTime;
+		g.gain.setValueAtTime(0.12 * strength, t);
+		g.gain.exponentialRampToValueAtTime(0.001, t + 0.03);
+		const p = this.ctx.createStereoPanner();
+		p.pan.value = Math.max(-1, Math.min(1, pan));
+		o.connect(g).connect(p).connect(this.master);
+		o.start(t);
+		o.stop(t + 0.04);
+	}
+
+	recharge() {
+		this._sample('recharge', 0.8);
+	}
+
+	// Looping charging sound while in a pit lane: an add-on 'recharge' sample if
+	// there is one, otherwise a synthesized crackle over a mains hum
+	setRecharging(on) {
+		if (!this.ctx || on === !!this._charging) return;
+		this._charging = on;
+		const t = this.ctx.currentTime;
+		if (this.samples.recharge) {
+			const l = this._loop('recharge');
+			l.gain.gain.setTargetAtTime(on ? 0.6 : 0, t, 0.1);
+			return;
+		}
+		if (!this.chargeVoice) {
+			const ctx = this.ctx;
+			const out = ctx.createGain();
+			out.gain.value = 0;
+			out.connect(this.master);
+			const hum = ctx.createOscillator();
+			hum.type = 'sawtooth';
+			hum.frequency.value = 100;
+			const humF = ctx.createBiquadFilter();
+			humF.type = 'lowpass';
+			humF.frequency.value = 500;
+			const humG = ctx.createGain();
+			humG.gain.value = 0.25;
+			hum.connect(humF).connect(humG).connect(out);
+			hum.start();
+			const crackle = ctx.createBufferSource();
+			crackle.buffer = this.noiseBuf;
+			crackle.loop = true;
+			const cf = ctx.createBiquadFilter();
+			cf.type = 'bandpass';
+			cf.frequency.value = 3200;
+			cf.Q.value = 0.8;
+			const cg = ctx.createGain();
+			cg.gain.value = 0;
+			crackle.connect(cf).connect(cg).connect(out);
+			crackle.start();
+			// random crackle bursts
+			const timer = setInterval(() => {
+				const now = ctx.currentTime;
+				cg.gain.cancelScheduledValues(now);
+				cg.gain.setValueAtTime(Math.random() < 0.4 ? 0.5 + Math.random() * 0.6 : 0.05, now);
+				cg.gain.setTargetAtTime(0.05, now + 0.02, 0.03);
+			}, 45);
+			this.chargeVoice = { out, timer };
+		}
+		this.chargeVoice.out.gain.setTargetAtTime(on ? 0.35 : 0, t, 0.12);
 	}
 
 	pickup() {

@@ -39,7 +39,7 @@ export class AIPilot {
 		// Avoid the ship directly ahead
 		const L = t.length;
 		for (const o of crafts) {
-			if (o === c) continue;
+			if (o === c || o.track !== c.track || o.eliminated) continue;
 			let ds = o.s - c.s;
 			if (ds < -L / 2) ds += L;
 			if (ds > L / 2) ds -= L;
@@ -50,6 +50,8 @@ export class AIPilot {
 				targetX = c.x + (c.x >= o.x ? 3 : -3);
 			}
 		}
+		// heading for a side route (pit lane): routes.js sets where to be
+		if (c.routeTargetX !== undefined) targetX = c.routeTargetX;
 		const margin = 3;
 		targetX = THREE.MathUtils.clamp(targetX, -hw + margin, hw - margin);
 

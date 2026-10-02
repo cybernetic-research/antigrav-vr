@@ -83,7 +83,14 @@ export class CockpitHUD {
 		bar(ctx, 300, 88, 188, 22, e, [ecol, ecol]);
 		text(ctx, `${Math.ceil(e * 100)}%`, 488, 70, 22, ecol, 'right');
 		text(ctx, 'WEAPON', 24, 196, 22, COLORS.dim, 'left');
-		text(ctx, d.weapon ? d.weapon.label : '\u2014', 24, 238, 40, d.weapon ? d.weapon.color : COLORS.dim, 'left', true);
+		if (!d.weapon && d.gun) {
+			// built-in gatling: name and heat bar
+			const hot = d.gun.overheated;
+			text(ctx, hot ? 'OVERHEAT' : 'GATLING', 24, 238, 36, hot ? '#ff4040' : '#ffe08a', 'left', true);
+			bar(ctx, 280, 226, 208, 22, d.gun.heat, ['#ffe08a', '#ff9a3d', '#ff3d3d']);
+		} else {
+			text(ctx, d.weapon ? d.weapon.label : '\u2014', 24, 238, 40, d.weapon ? d.weapon.color : COLORS.dim, 'left', true);
+		}
 		if (d.weapon && d.weapon.ammo > 1) text(ctx, `x${d.weapon.ammo}`, 488, 238, 36, COLORS.text, 'right', true);
 		this.left.texture.needsUpdate = true;
 	}
@@ -132,7 +139,8 @@ export class CockpitHUD {
 		ctx.fillStyle = 'rgba(42,209,255,0.06)';
 		ctx.fillRect(rx, ry, rw, rh);
 		const P = d.player;
-		const hw = this.path.halfWidthAt(P.s);
+		const path = P.track; // main loop or the side route being flown
+		const hw = path.halfWidthAt(P.s);
 		const lx = rw / 2 / 18;
 		ctx.fillStyle = 'rgba(200,230,255,0.10)';
 		ctx.fillRect(cx - (hw + P.x) * lx, ry, hw * 2 * lx, rh);
@@ -144,21 +152,21 @@ export class CockpitHUD {
 			ctx.lineTo(cx + (e - P.x) * lx, ry + rh);
 			ctx.stroke();
 		}
-		const L = this.path.length;
+		const L = path.length;
 		const rel = (s) => {
 			let ds = s - P.s;
 			if (ds > L / 2) ds -= L;
 			if (ds < -L / 2) ds += L;
 			return ds;
 		};
-		for (const p of d.projectiles || []) {
+		for (const p of path === this.path ? d.projectiles || [] : []) {
 			const ds = rel(p.s);
 			if (ds < -40 || ds > 90) continue;
 			ctx.fillStyle = p.color;
 			ctx.fillRect(cx + (p.x - P.x) * lx - 4, py - ds * ppm - 4, 8, 8);
 		}
 		for (const k of d.crafts) {
-			if (k.eliminated) continue;
+			if (k.eliminated || k.track !== path) continue;
 			const ds = rel(k.s);
 			if (ds < -45 || ds > 95) continue;
 			const w = 4.2 * lx;

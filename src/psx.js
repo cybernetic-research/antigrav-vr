@@ -24,7 +24,7 @@ export const PSX_TRACKS = Object.entries(DISC_TRACKS).flatMap(([folder, g]) =>
 const TARGET_HALF_WIDTH = 12.5;
 
 const FACE_FLAGS = { TRACK: 1, WEAPON: 2, FLIP: 4, WEAPON_2: 8, BOOST: 32 }; // WEAPON / WEAPON_2 = pickup pads (left / right)
-const SECTION_FLAGS = { JUMP: 1 };
+const SECTION_FLAGS = { JUMP: 1, JUNCTION_END: 8, JUNCTION_START: 16, JUNCTION: 32 };
 
 // Which PSX tracks are present? (HEAD request for each TRACK.TRS)
 export async function findPsxTracks() {
@@ -133,11 +133,33 @@ export async function loadPsxTrack(def, read = fetchBin, onProgress = () => {}) 
 		kappaSmooth: 10
 	});
 	addBoosts(path, faces, vertices, k);
+
+	// Side routes. Ones that rejoin near the start/finish line are pit lanes
+	// (they recharge shields in this game); the rest are alternative routes.
+	const branches = [];
+	for (const list of extractBranches(sections, line.order)) {
+		const g = lineGeometry(list, sections, faces, vertices, false);
+		if (g.centers.length < 4) continue;
+		if (line.flip) for (const u of g.ups) u.negate();
+		const bpath = new TrackPath({
+			points: g.centers.map((c) => c.clone().multiplyScalar(k)),
+			ups: g.ups,
+			halfWidths: g.halfWidths.map((w) => w * k),
+			closed: false,
+			kappaSmooth: 6
+		});
+		const forkS = nearestS(path, bpath.pos, 0);
+		const rejoinS = nearestS(path, bpath.pos, bpath.count - 1);
+		const L = path.length;
+		const pit = rejoinS > L * 0.85 || rejoinS < L * 0.08;
+		branches.push({ path: bpath, forkS, rejoinS, pit });
+	}
 	onProgress(1, 'Ready');
 
 	return {
 		name: def.name,
 		path,
+		branches,
 		group,
 		sky,
 		fog: new THREE.Fog(0x000000, 600, 4000),
@@ -219,9 +241,44 @@ function extractLine(sections, faces, vertices) {
 		i = sections[i].next;
 	} while (i > 0 && i < sections.length && !seen.has(i));
 
+	const line = lineGeometry(order, sections, faces, vertices, true);
+	// If the stored normals point down (winding convention), flip them all
+	line.flip = line.ups.reduce((a, u) => a + u.y, 0) < 0;
+	if (line.flip) for (const u of line.ups) u.negate();
+	const sorted = [...line.halfWidths].sort((a, b) => a - b);
+	line.medianHalfWidth = sorted[sorted.length >> 1] || 1;
+	line.order = order;
+	return line;
+}
+
+// Side routes (pit lanes, alternative routes): sections reached through a
+// junction that leave the main loop and rejoin it. Returns the section index
+// lists, each starting at the fork section and ending at the rejoin section.
+function extractBranches(sections, order) {
+	const onMain = new Set(order);
+	const seen = new Set();
+	const out = [];
+	for (const si of order) {
+		const j = sections[si].nextJunction;
+		if (j < 0 || j >= sections.length || !(sections[j].flags & SECTION_FLAGS.JUNCTION_START) || seen.has(j)) continue;
+		seen.add(j);
+		const list = [si];
+		let k = j;
+		for (let guard = 0; guard < 400 && !onMain.has(k) && k >= 0 && k < sections.length; guard++) {
+			list.push(k);
+			k = sections[k].next;
+		}
+		if (onMain.has(k) && list.length > 2) out.push([...list, k]);
+	}
+	return out;
+}
+
+// Centre, up and half width of the drivable (TRACK) faces of each listed section
+function lineGeometry(list, sections, faces, vertices, closed) {
 	const centers = [];
 	const ups = [];
-	for (const si of order) {
+	const used = [];
+	for (const si of list) {
 		const s = sections[si];
 		const c = new THREE.Vector3();
 		const u = new THREE.Vector3();
@@ -238,24 +295,18 @@ function extractLine(sections, faces, vertices) {
 		if (u.lengthSq() < 1e-6) u.set(0, 1, 0);
 		centers.push(c);
 		ups.push(u.normalize());
+		used.push(si);
 	}
-
-	// If the stored normals point down (winding convention), flip them all
-	const avgUp = ups.reduce((a, u) => a + u.y, 0);
-	if (avgUp < 0) for (const u of ups) u.negate();
-
 	// Width from the TRACK faces' extent across the direction of travel
 	const halfWidths = [];
 	const fwd = new THREE.Vector3();
 	const right = new THREE.Vector3();
-	let ci = 0;
-	for (const si of order) {
+	const n = centers.length;
+	used.forEach((si, ci) => {
 		const s = sections[si];
-		let hasTrack = false;
-		for (let f = s.firstFace; f < s.firstFace + s.numFaces; f++) if (faces[f] && faces[f].flags & FACE_FLAGS.TRACK) hasTrack = true;
-		if (!hasTrack) continue;
-		const n = centers.length;
-		fwd.subVectors(centers[(ci + 1) % n], centers[(ci - 1 + n) % n]).normalize();
+		const a = closed ? (ci - 1 + n) % n : Math.max(0, ci - 1);
+		const b = closed ? (ci + 1) % n : Math.min(n - 1, ci + 1);
+		fwd.subVectors(centers[b], centers[a]).normalize();
 		right.crossVectors(fwd, ups[ci]).normalize();
 		let lo = 0;
 		let hi = 0;
@@ -269,14 +320,26 @@ function extractLine(sections, faces, vertices) {
 			}
 		}
 		halfWidths.push(Math.max(1, Math.min(-lo, hi)));
-		ci++;
-	}
-
-	const sorted = [...halfWidths].sort((a, b) => a - b);
-	return { centers, ups, halfWidths, medianHalfWidth: sorted[sorted.length >> 1] || 1 };
+	});
+	return { centers, ups, halfWidths };
 }
 
 const _t = new THREE.Vector3();
+
+// Distance along `path` of the sample closest to point i of a position array
+function nearestS(path, posArray, i) {
+	const x = posArray[i * 3], y = posArray[i * 3 + 1], z = posArray[i * 3 + 2];
+	let best = 0;
+	let bestD = Infinity;
+	for (let j = 0; j < path.count; j++) {
+		const d = (path.pos[j * 3] - x) ** 2 + (path.pos[j * 3 + 1] - y) ** 2 + (path.pos[j * 3 + 2] - z) ** 2;
+		if (d < bestD) {
+			bestD = d;
+			best = j;
+		}
+	}
+	return best * path.step;
+}
 
 function addBoosts(path, faces, vertices, k) {
 	addZones(path, faces, vertices, k, FACE_FLAGS.BOOST, path.boosts);

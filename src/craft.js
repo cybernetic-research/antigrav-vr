@@ -17,7 +17,9 @@ const SHIP_LEN = 6.6;
 // the ship as the track curves. Without steering the ship drifts to the outside.
 export class Craft {
 	constructor(track, cls, { s = 0, x = 0, skill = 1 } = {}) {
-		this.track = track;
+		this.track = track; // the path being flown (the main loop, or a side route)
+		this.mainTrack = track;
+		this.route = null; // side route currently taken (see routes.js)
 		this.cls = cls;
 		this.skill = skill; // top-speed multiplier (AI variety / rubber banding)
 		this.s = track.wrap(s);
@@ -50,6 +52,7 @@ export class Craft {
 		this.padCooldown = 0;
 		this.lastHit = -10;
 		this.hitShake = 0;
+		this.gunFiring = false; // built-in gun recoil cuts thrust
 	}
 
 	get speed() {
@@ -57,8 +60,24 @@ export class Craft {
 	}
 
 	// Distance covered in the race; used for positions
+	// Distance along the main loop, also while on a side route
+	get mainS() {
+		const b = this.route;
+		if (!b) return this.s;
+		const L = this.mainTrack.length;
+		let span = b.rejoinS - b.forkS;
+		if (span < 0) span += L;
+		return this.mainTrack.wrap(b.forkS + (this.s / b.path.length) * span);
+	}
+
 	get progress() {
-		return (this.lap - 1) * this.track.length + this.s;
+		return (this.lap - 1) * this.mainTrack.length + this.mainS;
+	}
+
+	completeLap(raceTime) {
+		this.lap++;
+		if (this.lap > 1) this.lapTimes.push(raceTime - this.lapStart);
+		this.lapStart = raceTime;
 	}
 
 	step(dt, raceTime) {
@@ -86,8 +105,9 @@ export class Craft {
 		const hx = Math.cos(this.psi);
 		const hy = Math.sin(this.psi);
 		const drag = c.accel / vmax; // linear drag so thrust balances at vmax
-		let ax = hx * inp.thrust * c.accel;
-		let ay = hy * inp.thrust * c.accel;
+		const thrust = inp.thrust * (this.gunFiring ? 0.82 : 1);
+		let ax = hx * thrust * c.accel;
+		let ay = hy * thrust * c.accel;
 		const airDrag = (inp.airL + inp.airR) * 0.18;
 		const extraDrag = this.boostTime > 0 ? drag * 0.5 : drag;
 		ax -= this.vf * (extraDrag + airDrag);
@@ -176,10 +196,10 @@ export class Craft {
 
 		// --- Laps ------------------------------------------------------------
 		const L = this.track.length;
-		if (prevS > L * 0.75 && this.s < L * 0.25) {
-			this.lap++;
-			if (this.lap > 1) this.lapTimes.push(raceTime - this.lapStart);
-			this.lapStart = raceTime;
+		if (this.track !== this.mainTrack) {
+			// on a side route: laps are handled when rejoining (routes.js)
+		} else if (prevS > L * 0.75 && this.s < L * 0.25) {
+			this.completeLap(raceTime);
 		} else if (prevS < L * 0.25 && this.s > L * 0.75) {
 			this.lap--;
 		}
@@ -213,7 +233,7 @@ export function collideCrafts(crafts) {
 		for (let j = i + 1; j < crafts.length; j++) {
 			const a = crafts[i];
 			const b = crafts[j];
-			if (a.eliminated || b.eliminated) continue;
+			if (a.eliminated || b.eliminated || a.track !== b.track) continue;
 			let ds = b.s - a.s;
 			if (ds > L / 2) ds -= L;
 			if (ds < -L / 2) ds += L;

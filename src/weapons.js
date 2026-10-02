@@ -17,7 +17,10 @@ const PICK = [
 	['mines', 0.24],
 	['autopilot', 0.18]
 ];
-const DAMAGE = { rocket: 9, missile: 24, mine: 14 }; // per projectile kind
+const DAMAGE = { rocket: 9, missile: 24, mine: 14, round: 1.6 }; // per projectile kind
+
+// Built-in gatling (a team special): spin-up, rate of fire, heat
+export const GATLING = { spinUp: 0.45, rate: 12, heatPerSec: 1 / 3.2, coolPerSec: 0.45, range: 160, speed: 260 };
 export const AUTOPILOT_TIME = 6;
 
 const _v = new THREE.Vector3();
@@ -63,12 +66,14 @@ export class WeaponSystem {
 			mine: new THREE.IcosahedronGeometry(0.45, 0)
 		};
 		this.bodyMat = new THREE.MeshStandardMaterial({ color: 0x9aa0aa, metalness: 0.8, roughness: 0.3 });
+		this.roundGeo = new THREE.BoxGeometry(0.14, 0.14, 4.5);
+		this.roundMat = new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
 		this.mineMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, metalness: 0.6, roughness: 0.4, emissive: 0x332200 });
 	}
 
 	// --- Pickups -------------------------------------------------------------------
 	tryPickup(craft, now) {
-		if (craft.weapon || craft.eliminated || !this.path.weaponAt(craft.s, craft.x)) return;
+		if (craft.weapon || craft.eliminated || craft.track !== this.path || !this.path.weaponAt(craft.s, craft.x)) return;
 		if (craft.padCooldown > now) return;
 		craft.padCooldown = now + 0.8;
 		let id;
@@ -82,6 +87,8 @@ export class WeaponSystem {
 	fire(craft) {
 		const w = craft.weapon;
 		if (!w || craft.eliminated) return;
+		// projectiles fly along the main loop: hold fire while on a side route
+		if (craft.track !== this.path && w.id !== 'autopilot') return;
 		craft.weapon = null;
 		const fwd = Math.cos(craft.psi);
 		const side = -Math.sin(craft.psi); // lateral (right) component of the nose
@@ -106,12 +113,75 @@ export class WeaponSystem {
 		this.events.fired?.(craft, w, null);
 	}
 
+	// --- Built-in gatling ----------------------------------------------------------------
+	// Call every physics step for crafts whose team has the gatling special.
+	gatling(craft, trigger, dt, now) {
+		const g = (craft.gun ||= { spin: 0, heat: 0, overheated: false, nextShot: 0 });
+		const can = trigger && !g.overheated && !craft.eliminated && !craft.finished && craft.track === this.path;
+		g.spin = Math.max(0, Math.min(1, g.spin + (can ? dt / GATLING.spinUp : -dt / 0.8)));
+		const firing = can && g.spin >= 1;
+		craft.gunFiring = firing;
+		g.firing = firing;
+		if (firing) {
+			g.heat += GATLING.heatPerSec * dt;
+			if (g.heat >= 1) {
+				g.heat = 1;
+				g.overheated = true;
+				this.events.overheat?.(craft);
+			}
+			if (now >= g.nextShot) {
+				g.nextShot = now + 1 / GATLING.rate;
+				const fwd = Math.cos(craft.psi);
+				const side = -Math.sin(craft.psi);
+				const v = Math.max(craft.vf, 0) + GATLING.speed;
+				const spread = (Math.random() - 0.5) * 0.03;
+				const p = this._spawnRound(craft, v * fwd, v * (side + spread));
+				this.events.gunShot?.(craft, p);
+			}
+		} else {
+			g.heat = Math.max(0, g.heat - GATLING.coolPerSec * dt);
+			if (g.overheated && g.heat < 0.25) g.overheated = false;
+		}
+	}
+
+	_spawnRound(owner, vs, vx) {
+		const mesh = new THREE.Mesh(this.roundGeo, this.roundMat);
+		this.group.add(mesh);
+		const p = { kind: 'round', owner, s: this.path.wrap(owner.s + 5), x: owner.x, vs, vx, h: 0.7, life: GATLING.range / GATLING.speed, age: 0, mesh, color: '#ffe08a' };
+		this.projectiles.push(p);
+		return p;
+	}
+
+	// Six spinning barrels under the nose, plus a muzzle flash
+	attachGun(shipMesh, craft) {
+		const gun = new THREE.Group();
+		gun.position.set(0, 0.32, -3.0);
+		const barrels = new THREE.Group();
+		const barrelGeo = new THREE.CylinderGeometry(0.028, 0.028, 1.2, 6).rotateX(Math.PI / 2);
+		for (let i = 0; i < 6; i++) {
+			const a = (i / 6) * Math.PI * 2;
+			const b = new THREE.Mesh(barrelGeo, this.bodyMat);
+			b.position.set(Math.cos(a) * 0.085, Math.sin(a) * 0.085, -0.3);
+			barrels.add(b);
+		}
+		const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.55, 12).rotateX(Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x2a2d33, metalness: 0.8, roughness: 0.4 }));
+		housing.position.z = 0.35;
+		gun.add(barrels, housing);
+		const flash = new THREE.Sprite(this.mats.rocket);
+		flash.position.z = -1.0;
+		flash.scale.setScalar(1.2);
+		flash.visible = false;
+		gun.add(flash);
+		shipMesh.add(gun);
+		craft.gunModel = { barrels, flash };
+	}
+
 	_targetAhead(craft, range) {
 		const L = this.path.length;
 		let best = null;
 		let bestD = range;
 		for (const c of this.crafts) {
-			if (c === craft || c.eliminated) continue;
+			if (c === craft || c.eliminated || c.track !== craft.track) continue;
 			let ds = c.s - craft.s;
 			if (ds < 0) ds += L;
 			if (ds > 2 && ds < bestD) {
@@ -155,11 +225,12 @@ export class WeaponSystem {
 			let dead = p.age > p.life;
 			if (p.kind !== 'mine' && Math.abs(p.x) > this.path.halfWidthAt(p.s) + 0.5) {
 				dead = true;
-				this._blast(p.s, p.x, 0.8);
+				this._blast(p.s, p.x, p.kind === 'round' ? 0.25 : 0.8);
 			}
 			if (!dead) {
 				for (const c of this.crafts) {
-					if (c.eliminated) continue;
+					// projectiles fly along the main loop; ships on a side route are out of reach
+					if (c.eliminated || c.track !== this.path) continue;
 					if (c === p.owner && (p.kind !== 'mine' || p.age < 1.5)) continue;
 					let ds = c.s - p.s;
 					if (ds > L / 2) ds -= L;
@@ -194,11 +265,20 @@ export class WeaponSystem {
 	_hit(c, p, now) {
 		const dmg = DAMAGE[p.kind];
 		c.energy -= dmg;
-		c.vf *= p.kind === 'missile' ? 0.35 : 0.5;
-		c.vl += (Math.random() - 0.5) * 14;
-		c.omega += (Math.random() < 0.5 ? -1 : 1) * (p.kind === 'missile' ? 4 : 2.5);
-		c.hitShake = 1;
 		c.lastHit = now;
+		if (p.kind !== 'round') {
+			c.vf *= p.kind === 'missile' ? 0.35 : 0.5;
+			c.vl += (Math.random() - 0.5) * 14;
+			c.omega += (Math.random() < 0.5 ? -1 : 1) * (p.kind === 'missile' ? 4 : 2.5);
+			c.hitShake = 1;
+		}
+		if (p.kind === 'round') {
+			c.vf *= 0.985; // a hail of rounds scrubs speed, one by one
+			this._blast(c.s, c.x, 0.35);
+			this.events.hit?.(c, p.owner, p.kind);
+			if (c.energy <= 0 && !c.eliminated) this.eliminate(c, p.owner);
+			return;
+		}
 		this._blast(c.s, c.x, p.kind === 'missile' ? 2.2 : 1.4);
 		this.events.hit?.(c, p.owner, p.kind);
 		if (c.energy <= 0 && !c.eliminated) this.eliminate(c, p.owner);
@@ -222,12 +302,21 @@ export class WeaponSystem {
 	}
 
 	// Update projectile meshes (call once per rendered frame)
-	updateVisuals(now) {
+	updateVisuals(now, dt = 1 / 72) {
+		for (const c of this.crafts) {
+			if (!c.gunModel || !c.gun) continue;
+			c.gunModel.barrels.rotation.z += c.gun.spin * 40 * dt;
+			c.gunModel.flash.visible = c.gun.firing && Math.random() < 0.7;
+			c.gunModel.flash.scale.setScalar(0.8 + Math.random() * 0.8);
+		}
 		for (const p of this.projectiles) {
 			this.path.frameAt(p.s, this.frame);
 			p.mesh.position.copy(this.frame.pos).addScaledVector(this.frame.right, p.x).addScaledVector(this.frame.up, p.h + (p.kind === 'mine' ? Math.sin(now * 3 + p.s) * 0.1 : 0));
 			this.path.quaternionAt(this.frame, p.mesh.quaternion);
-			if (p.kind !== 'mine') {
+			if (p.kind === 'round') {
+				_q.setFromAxisAngle(_v.set(0, 1, 0), Math.atan2(-p.vx, p.vs));
+				p.mesh.quaternion.multiply(_q);
+			} else if (p.kind !== 'mine') {
 				_q.setFromAxisAngle(_v.set(0, 1, 0), Math.atan2(-p.vx, p.vs));
 				p.mesh.quaternion.multiply(_q);
 			} else {
@@ -253,6 +342,19 @@ function roll() {
 	return 'rockets';
 }
 
+// AI gatling: hold the trigger while someone is lined up ahead in range
+export function aiGatlingTrigger(craft, crafts) {
+	if (craft.eliminated || craft.gun?.overheated) return false;
+	const L = craft.track.length;
+	for (const c of crafts) {
+		if (c === craft || c.eliminated || c.track !== craft.track) continue;
+		let ds = c.s - craft.s;
+		if (ds < 0) ds += L;
+		if (ds > 3 && ds < 110 && Math.abs(c.x - craft.x) < 2.6) return Math.random() < (craft.fireWill ?? 0.6) + 0.3;
+	}
+	return false;
+}
+
 // AI weapon use: call each physics step for AI crafts holding a weapon
 export function aiUseWeapon(craft, crafts, weapons, now) {
 	const w = craft.weapon;
@@ -265,7 +367,7 @@ export function aiUseWeapon(craft, crafts, weapons, now) {
 	let ahead = null;
 	let behind = null;
 	for (const c of crafts) {
-		if (c === craft || c.eliminated) continue;
+		if (c === craft || c.eliminated || c.track !== craft.track) continue;
 		let ds = c.s - craft.s;
 		if (ds > L / 2) ds -= L;
 		if (ds < -L / 2) ds += L;

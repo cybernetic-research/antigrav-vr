@@ -101,6 +101,7 @@ export class Input {
 		this._pauseHeld = pause;
 		this.firePressed = fire && !this._fireHeld;
 		this._fireHeld = fire;
+		this.fireHeld = fire; // held: built-in guns (gatling)
 		return s;
 	}
 }

@@ -15,8 +15,10 @@ export class TrackPath {
 	// points: Vector3[] control points (closed loop, do not repeat the first)
 	// ups:    Vector3[] per-point up vectors, or null for automatic banking
 	// halfWidths: number[] per point, or a single number
-	constructor({ points, ups = null, halfWidths = 12, step = 1.0, autoBank = 0, kappaSmooth = 12 }) {
-		const curve = new THREE.CatmullRomCurve3(points, true, 'centripetal');
+	// closed: a lap; open (closed = false): a side route with a start and an end
+	constructor({ points, ups = null, halfWidths = 12, step = 1.0, autoBank = 0, kappaSmooth = 12, closed = true }) {
+		this.closed = closed;
+		const curve = new THREE.CatmullRomCurve3(points, closed, 'centripetal');
 		curve.arcLengthDivisions = Math.max(2000, points.length * 40);
 		this.curve = curve;
 		this.length = curve.getLength();
@@ -45,9 +47,9 @@ export class TrackPath {
 			curve.getPointAt(uu, p);
 			curve.getTangentAt(uu, t).normalize();
 			// Map arc-length parameter back to control-point index for per-point data
-			const ct = curve.getUtoTmapping(uu) * np;
-			const i0 = Math.floor(ct) % np;
-			const i1 = (i0 + 1) % np;
+			const ct = curve.getUtoTmapping(uu) * (closed ? np : np - 1);
+			const i0 = Math.min(Math.floor(ct) % np, np - 1);
+			const i1 = closed ? (i0 + 1) % np : Math.min(i0 + 1, np - 1);
 			const a = ct - Math.floor(ct);
 
 			if (ups) {
@@ -112,6 +114,7 @@ export class TrackPath {
 
 	wrap(s) {
 		const L = this.length;
+		if (!this.closed) return Math.max(0, Math.min(L - 1e-3, s));
 		return ((s % L) + L) % L;
 	}
 
@@ -120,7 +123,7 @@ export class TrackPath {
 		s = this.wrap(s);
 		const f = s / this.step;
 		const i0 = Math.floor(f) % this.count;
-		const i1 = (i0 + 1) % this.count;
+		const i1 = this.closed ? (i0 + 1) % this.count : Math.min(i0 + 1, this.count - 1);
 		const a = f - Math.floor(f);
 		lerp3(this.pos, i0, i1, a, out.pos);
 		lerp3(this.fwd, i0, i1, a, out.fwd).normalize();

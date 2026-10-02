@@ -10,8 +10,9 @@ import { Input } from './input.js';
 import { Audio } from './audio.js';
 import { CanvasPanel, Pointers, COLORS, FONT_DISPLAY } from './ui.js';
 import { CockpitHUD, Banner, formatTime } from './hud.js';
-import { WeaponSystem, aiUseWeapon } from './weapons.js';
+import { WeaponSystem, aiUseWeapon, aiGatlingTrigger } from './weapons.js';
 import { LoadingScreen } from './loading.js';
+import { updateRoutes } from './routes.js';
 
 // Working title. Deliberately not the name of the game that inspired it.
 const TITLE = 'ANTIGRAV';
@@ -535,6 +536,7 @@ function setupRace(track) {
 		const craft = new Craft(path, shipClass(cls, team), { s, x, skill });
 		craft.baseSkill = skill;
 		craft.isPlayer = isPlayer;
+		craft.team = team;
 		craft.name = isPlayer ? 'YOU' : AI_NAMES[i % AI_NAMES.length];
 		craft.colorCss = '#' + team.liveries[liveryIndex % team.liveries.length].glow.toString(16).padStart(6, '0');
 		crafts.push(craft);
@@ -610,6 +612,20 @@ function setupRace(track) {
 		lastWrongWay: 0
 	};
 	race.weapons = new WeaponSystem(path, group, crafts, weaponEvents(race));
+	race.routeEvents = {
+		enter(c, b) {
+			if (!c.isPlayer) return;
+			if (b.pit) {
+				audio.say('recharging', true);
+				audio.recharge();
+				race.banner.show('RECHARGING', elapsed, 1.6, '#40ff80');
+			} else {
+				race.banner.show('ALTERNATIVE ROUTE', elapsed, 1.2, COLORS.accent);
+			}
+		}
+	};
+	// team specials: built-in gatling
+	crafts.forEach((c, i) => c.team.special === 'gatling' && race.weapons.attachGun(meshes[i], c));
 	state = 'countdown';
 	pointers.setPanels([]);
 	audio.setRacing(true);
@@ -679,13 +695,30 @@ function weaponEvents(r) {
 			if (c.isPlayer || c.position.distanceTo(r.player.position) < 80) audio.launch();
 			if (w.id === 'missile' && target === r.player) audio.say('missile_incoming', true);
 		},
-		hit(target) {
+		hit(target, by, kind) {
 			const n = nearPlayer(target);
+			if (kind === 'round') {
+				if (n.strength > 0.3) audio.tick(n.strength, n.pan);
+				if (target.isPlayer) {
+					r.shake = Math.max(r.shake, 0.25);
+					haptic(0.3);
+				}
+				return;
+			}
 			audio.explosion(n.strength * 0.8, n.pan);
 			if (target.isPlayer) {
 				r.shake = 1;
 				haptic(1);
 			}
+		},
+		gunShot(c) {
+			const n = nearPlayer(c);
+			if (c.isPlayer || n.strength > 0.25) audio.gunShot(c.isPlayer ? 0.8 : n.strength * 0.7, c.isPlayer ? 0 : n.pan);
+		},
+		overheat(c) {
+			if (!c.isPlayer) return;
+			audio.beep(220, 0.25, 0.2);
+			r.banner.show('OVERHEAT', elapsed, 0.9, '#ff4040');
 		},
 		eliminated(target, by) {
 			const n = nearPlayer(target);
@@ -767,6 +800,10 @@ function stepRace(dt) {
 			r.weapons.tryPickup(c, r.time);
 			if (r.time - c.lastHit > 3) c.energy = Math.min(100, c.energy + 4 * PHYS_DT);
 			if (pilot) aiUseWeapon(c, r.crafts, r.weapons, r.time);
+			if (c.team.special === 'gatling') {
+				const trigger = c.isPlayer ? input.fireHeld && !c.weapon && state === 'race' : r.time > 6 && aiGatlingTrigger(c, r.crafts);
+				r.weapons.gatling(c, trigger, PHYS_DT, r.time);
+			}
 			if (pilot) {
 				// gentle rubber banding around the player
 				const d = c.progress - pc.progress;
@@ -781,8 +818,19 @@ function stepRace(dt) {
 				r.finishOrder.push(c);
 			}
 			if (c.energy <= 0 && !c.eliminated) r.weapons.eliminate(c, null);
+			// pit lanes recharge the shield
+			if (c.route?.pit) c.energy = Math.min(100, c.energy + 25 * PHYS_DT);
 		}
 		collideCrafts(r.crafts);
+		updateRoutes(r.crafts, r.track, r.time, r.routeEvents);
+		for (const c of r.crafts) {
+			// a lap can also complete when a pit lane rejoins past the line
+			if (c.lap > r.laps && !c.finished && !c.eliminated) {
+				c.finished = true;
+				c.finishTime = r.time;
+				r.finishOrder.push(c);
+			}
+		}
 		r.weapons.step(PHYS_DT, r.time);
 		if (pc.wallHit > 0.05) r.shake = Math.max(r.shake, pc.wallHit);
 		if (pc.boostHit) audio.whoosh();
@@ -873,7 +921,26 @@ function updateVisuals(dt, now) {
 		r.rigMount.quaternion.copy(shipQ.invert().multiply(desired));
 	}
 
-	r.weapons.updateVisuals(now);
+	r.weapons.updateVisuals(now, dt);
+
+	// ionising field around ships recharging in a pit lane
+	for (let i = 0; i < r.crafts.length; i++) {
+		const c = r.crafts[i];
+		const on = !!c.route?.pit && !c.eliminated;
+		if (on && !c.aura) c.aura = makeAura(r.meshes[i]);
+		if (c.aura) {
+			c.aura.visible = on;
+			if (on) {
+				const flick = 0.55 + 0.45 * Math.random();
+				c.aura.children[0].material.opacity = 0.22 * flick;
+				c.aura.children[1].material.opacity = 0.3 * flick;
+				c.aura.children[1].rotation.z += dt * 3.1;
+				c.aura.children[1].rotation.x += dt * 1.7;
+				c.aura.scale.setScalar(1 + Math.sin(now * 31) * 0.02);
+			}
+		}
+	}
+	audio.setRecharging(!!r.player.route?.pit && !r.player.eliminated);
 
 	// Sky follows the camera
 	if (r.track.sky) r.track.sky.position.copy(camera.getWorldPosition(_v));
@@ -894,6 +961,7 @@ function updateVisuals(dt, now) {
 		boosting: pc.boostTime > 0,
 		energy: pc.energy,
 		weapon: pc.weapon,
+		gun: pc.team?.special === 'gatling' ? pc.gun || { heat: 0, overheated: false } : null,
 		player: pc,
 		crafts: r.crafts,
 		projectiles: r.weapons.projectiles
@@ -909,6 +977,25 @@ function updateVisuals(dt, now) {
 		if (!rival || d < rival.distance) rival = { distance: d, pan: _v.subVectors(c.position, pc.position).dot(pr) / Math.max(d, 1), speed: c.speed };
 	}
 	audio.update(pc.speed, pc.input.thrust, Math.max(pc.wallHit, r.shake * 0.5), rival);
+}
+
+// Translucent electric shell plus turning arc lines, wrapped round a ship
+function makeAura(shipMesh) {
+	const aura = new THREE.Group();
+	const shell = new THREE.Mesh(
+		new THREE.SphereGeometry(1, 24, 16),
+		new THREE.MeshBasicMaterial({ color: 0x8ff0ff, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false })
+	);
+	const arcs = new THREE.Mesh(
+		new THREE.IcosahedronGeometry(1.04, 2),
+		new THREE.MeshBasicMaterial({ color: 0x58d8ff, wireframe: true, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false, fog: false })
+	);
+	aura.add(shell, arcs);
+	aura.children.forEach((m) => m.scale.set(2.9, 0.95, 4.5));
+	aura.position.set(0, 0.55, 0);
+	aura.visible = false;
+	shipMesh.add(aura);
+	return aura;
 }
 
 let lastHaptic = 0;
