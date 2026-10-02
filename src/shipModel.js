@@ -321,6 +321,8 @@ function liveryTexture(livery, number) {
 // Build a ship. With {cockpit: true} the canopy bubble is omitted (the
 // interior adds its own frame and glass) and the hull stays open over the seat.
 export function buildShip(team = TEAMS[0], liveryIndex = 0, { cockpit = false, number = 0 } = {}) {
+	// Add-on teams bring their own models (must set userData.glows, may be empty)
+	if (team.buildModel) return team.buildModel(liveryIndex, { cockpit, number });
 	const livery = team.liveries[liveryIndex % team.liveries.length];
 	const ship = new THREE.Group();
 	// double sided: mirrored (negatively scaled) plates flip their winding

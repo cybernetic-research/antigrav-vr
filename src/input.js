@@ -2,7 +2,7 @@
 //
 // VR (Quest Touch / any xr-standard controller):
 //   left stick (or right stick) = steer, right trigger = thrust, left trigger = brake
-//   left/right grip = left/right airbrake, A or X = fire weapon, B or Y = pause
+//   left/right grip = left/right airbrake, A or X = fire weapon, hold right B = pause
 // Keyboard: arrows/WASD steer + thrust/brake, Q/E airbrakes, F/Enter/Ctrl fire, Esc/P pause
 // Gamepad: left stick steer, RT thrust, LT brake, LB/RB airbrakes, X/B fire, Start pause
 
@@ -81,7 +81,16 @@ export class Input {
 					s.airL = Math.max(s.airL, grip);
 				}
 				s.steer += stickX;
-				pause ||= !!gp.buttons[5]?.pressed; // B (right) or Y (left)
+				// Pause: right B only, held briefly so a stray thumb doesn't pause the race.
+				// (The Meta/Oculus button is reserved by the system and never reaches web apps.)
+				if (src.handedness === 'right') {
+					if (gp.buttons[5]?.pressed) {
+						this._bHeldSince ??= performance.now();
+						if (performance.now() - this._bHeldSince > 350) pause = true;
+					} else {
+						this._bHeldSince = null;
+					}
+				}
 				fire ||= !!gp.buttons[4]?.pressed; // A (right) or X (left)
 			}
 		}

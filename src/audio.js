@@ -11,6 +11,11 @@ export class Audio {
 		this.ctx = null;
 		this.enabled = true;
 		this.music = { list: [], el: null, index: -1, mode: 'off', wanted: false };
+		// Add-ons can replace announcer lines and effects with their own AudioBuffers:
+		// voiceOverrides[id], samples.{launch, explosion, pickup, click, boost, engine, scrape}
+		this.voiceOverrides = {};
+		this.samples = {};
+		this.loops = {};
 	}
 
 	// Must be called from a user gesture (click / entering VR)
@@ -96,6 +101,7 @@ export class Audio {
 		const t = this.ctx.currentTime;
 		if (!on) {
 			for (const g of [this.engGain.gain, this.wind.g.gain, this.scrape.g.gain, this.rivalGain.gain]) g.setTargetAtTime(0, t, 0.1);
+			for (const l of Object.values(this.loops)) l.gain.gain.setTargetAtTime(0, t, 0.1);
 		}
 	}
 
@@ -106,10 +112,21 @@ export class Audio {
 		const base = 45 + speed * 1.3 + thrust * 12;
 		for (const { o, mul } of this.osc) o.frequency.setTargetAtTime(base * mul, t, 0.05);
 		this.engFilter.frequency.setTargetAtTime(250 + speed * 18 + thrust * 900, t, 0.05);
-		this.engGain.gain.setTargetAtTime(0.12 + thrust * 0.1 + Math.min(speed / 110, 1) * 0.08, t, 0.08);
+		const engineLevel = 0.12 + thrust * 0.1 + Math.min(speed / 110, 1) * 0.08;
+		const engineLoop = this._loop('engine');
+		if (engineLoop) {
+			// sampled engine replaces the synth: pitch follows speed
+			engineLoop.src.playbackRate.setTargetAtTime(0.55 + speed / 90 + thrust * 0.12, t, 0.05);
+			engineLoop.gain.gain.setTargetAtTime(engineLevel * 3, t, 0.08);
+			this.engGain.gain.setTargetAtTime(0, t, 0.08);
+		} else {
+			this.engGain.gain.setTargetAtTime(engineLevel, t, 0.08);
+		}
 		this.wind.g.gain.setTargetAtTime(Math.min(1, (speed / 100) ** 2) * 0.25, t, 0.1);
 		this.wind.f.frequency.setTargetAtTime(400 + speed * 12, t, 0.1);
-		this.scrape.g.gain.setTargetAtTime(wall * 0.5, t, 0.02);
+		const scrapeLoop = this._loop('scrape');
+		if (scrapeLoop) scrapeLoop.gain.gain.setTargetAtTime(wall * 0.9, t, 0.02);
+		else this.scrape.g.gain.setTargetAtTime(wall * 0.5, t, 0.02);
 		if (rival) {
 			const g = Math.max(0, 1 - rival.distance / 45) ** 2 * 0.25;
 			this.rivalGain.gain.setTargetAtTime(g, t, 0.05);
@@ -135,7 +152,7 @@ export class Audio {
 	}
 
 	whoosh() {
-		if (!this.ctx) return;
+		if (!this.ctx || this._sample('boost', 0.8)) return;
 		const ctx = this.ctx;
 		const src = ctx.createBufferSource();
 		src.buffer = this.noiseBuf;
@@ -243,7 +260,7 @@ export class Audio {
 		this.voiceQueue = [];
 		this.voiceBusyUntil = 0;
 		for (const id of ids) {
-			fetch(`assets/voice/${id}.m4a`)
+			fetch(new URL(`../assets/voice/${id}.m4a`, import.meta.url))
 				.then((r) => r.arrayBuffer())
 				.then((b) => this.ctx.decodeAudioData(b))
 				.then((buf) => (this.voices[id] = buf))
@@ -253,7 +270,7 @@ export class Audio {
 
 	// Queue an announcer line; urgent lines jump the queue. Music ducks under the voice.
 	say(id, urgent = false) {
-		if (!this.ctx || !this.voices?.[id]) return;
+		if (!this.ctx || !this._voice(id)) return;
 		if (urgent) this.voiceQueue.unshift(id);
 		else if (this.voiceQueue.length < 2) this.voiceQueue.push(id);
 		this._pumpVoice();
@@ -270,7 +287,7 @@ export class Audio {
 			}
 			return;
 		}
-		const buf = this.voices[this.voiceQueue.shift()];
+		const buf = this._voice(this.voiceQueue.shift());
 		const src = this.ctx.createBufferSource();
 		src.buffer = buf;
 		src.connect(this.voiceGain);
@@ -283,9 +300,46 @@ export class Audio {
 		if (this.voiceQueue.length) this._pumpVoice();
 	}
 
+	_voice(id) {
+		return this.voiceOverrides[id] || this.voices?.[id];
+	}
+
+	// Plays an add-on sample if one is registered; returns false otherwise
+	_sample(name, gain = 1, pan = 0, rate = 1) {
+		const buf = this.samples[name];
+		if (!this.ctx || !buf) return false;
+		const src = this.ctx.createBufferSource();
+		src.buffer = buf;
+		src.playbackRate.value = rate;
+		const g = this.ctx.createGain();
+		g.gain.value = gain;
+		const p = this.ctx.createStereoPanner();
+		p.pan.value = Math.max(-1, Math.min(1, pan));
+		src.connect(g).connect(p).connect(this.master);
+		src.start();
+		return true;
+	}
+
+	// Looping add-on sample (engine, scrape), created on first use
+	_loop(name) {
+		if (!this.ctx || !this.samples[name]) return null;
+		if (!this.loops[name] || this.loops[name].buffer !== this.samples[name]) {
+			if (this.loops[name]) this.loops[name].src.stop();
+			const src = this.ctx.createBufferSource();
+			src.buffer = this.samples[name];
+			src.loop = true;
+			const gain = this.ctx.createGain();
+			gain.gain.value = 0;
+			src.connect(gain).connect(this.master);
+			src.start();
+			this.loops[name] = { src, gain, buffer: this.samples[name] };
+		}
+		return this.loops[name];
+	}
+
 	// --- Weapon sounds -----------------------------------------------------------------
 	launch() {
-		if (!this.ctx) return;
+		if (!this.ctx || this._sample('launch', 0.8)) return;
 		const ctx = this.ctx;
 		const t = ctx.currentTime;
 		const src = ctx.createBufferSource();
@@ -305,7 +359,7 @@ export class Audio {
 
 	// strength 0..1, pan -1..1
 	explosion(strength = 1, pan = 0) {
-		if (!this.ctx) return;
+		if (!this.ctx || this._sample('explosion', strength, pan)) return;
 		const ctx = this.ctx;
 		const t = ctx.currentTime;
 		const p = ctx.createStereoPanner();
@@ -335,11 +389,13 @@ export class Audio {
 	}
 
 	pickup() {
+		if (this._sample('pickup', 0.8)) return;
 		this.beep(880, 0.08, 0.2);
 		setTimeout(() => this.beep(1320, 0.12, 0.2), 70);
 	}
 
 	click() {
+		if (this._sample('click', 0.7)) return;
 		this.beep(1200, 0.05, 0.15);
 	}
 }

@@ -268,7 +268,7 @@ helpPanel.setDraw((ctx, p) => {
 		['Steer', 'Thumbstick'],
 		['Airbrakes', 'Grip buttons (L / R)'],
 		['Fire weapon', 'A or X'],
-		['Pause', 'B or Y'],
+		['Pause', 'Hold B (right)'],
 		['', null],
 		['KEYBOARD / GAMEPAD', null],
 		['Thrust', 'W / Up / Space  -  RT'],
@@ -388,7 +388,7 @@ async function startRace() {
 	try {
 		// Let the "loading" frame render before the (synchronous) build work
 		await new Promise((r) => setTimeout(r, 30));
-		track = entry.kind === 'psx' ? await loadPsxTrack(entry.def) : buildBuiltinTrack(entry.def);
+		track = entry.kind === 'psx' ? await loadPsxTrack(entry.def) : entry.kind === 'mod' ? await entry.load() : buildBuiltinTrack(entry.def);
 	} catch (e) {
 		console.error(e);
 		loadingMessage = 'LOAD FAILED';
@@ -887,6 +887,45 @@ function maybeAutostart() {
 	if (params.has('opponents')) settings.opponents = Number(params.get('opponents'));
 	startRace();
 }
+// --- Add-on API ------------------------------------------------------------------------------
+// Add-ons (e.g. a mode that reads data from the player's own disc image) load
+// after this module and extend the game through window.antigrav.
+window.antigrav = {
+	THREE,
+	settings,
+	audio,
+	// [{name, blurb, load: async () => track}] where track = {name, path, group, sky, fog, background}
+	addTracks(list) {
+		trackList = trackList.concat(list.map((t) => ({ kind: 'mod', ...t })));
+		menuPanel.redraw();
+	},
+	// teams with {id, name, ship, blurb, stats, liveries, buildModel(liveryIndex, {cockpit, number})}
+	addTeams(list) {
+		TEAMS.push(...list);
+		menuPanel.redraw();
+	},
+	addMusic(list) {
+		addMusic(list);
+	},
+	// {id: AudioBuffer} replacing announcer lines (three, two, one, go, rockets, ...)
+	setVoices(map) {
+		Object.assign(audio.voiceOverrides, map);
+	},
+	// {launch, explosion, pickup, click, boost, engine, scrape}: AudioBuffers
+	setSamples(map) {
+		Object.assign(audio.samples, map);
+	},
+	// {rocket, missile, mine}: () => Object3D
+	setWeaponModels(map) {
+		WeaponSystem.models = { ...(WeaponSystem.models || {}), ...map };
+	},
+	setStatus(text) {
+		psxStatus = text;
+		menuPanel.redraw();
+	}
+};
+window.dispatchEvent(new Event('antigrav-ready'));
+
 window.__game = { get state() { return state; }, get race() { return race; }, settings, startRace, showTitle, renderer, audio, updateTitleShip,
 	// Lines up every team's ship in front of the title camera (for screenshots)
 	debugShips() {

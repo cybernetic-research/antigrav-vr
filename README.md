@@ -22,7 +22,7 @@ npm run serve:https    # https://<your-lan-ip>:8443  (a Quest on your network; a
 Alternatively, plug in a Quest and run `adb reverse tcp:8080 tcp:8080`, then open
 `http://localhost:8080` in the headset.
 
-Play seated. To recenter, hold the Meta button.
+Play seated. To recenter, hold the Meta button. (Web apps can't use the Meta button, so pause is a short hold of B on the right controller.)
 
 ## Controls
 
@@ -33,7 +33,7 @@ Play seated. To recenter, hold the Meta button.
 | Steer | Thumbstick | A D / Left Right | Left stick |
 | Airbrakes | Left / right grip | Q / E | LB / RB |
 | Fire weapon | A or X | F / Enter / Ctrl | X or B |
-| Pause | B or Y | Esc / P | Start |
+| Pause | Hold B (right controller) | Esc / P | Start |
 
 In VR you point at menus with the controller rays and pull the trigger to select. On the desktop you click them.
 

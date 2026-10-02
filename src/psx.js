@@ -70,19 +70,21 @@ async function fetchBin(url) {
 	return r.arrayBuffer();
 }
 
-export async function loadPsxTrack(def) {
+// read(path) -> Promise<ArrayBuffer>; defaults to fetching from the server.
+// Add-ons pass a reader backed by a disc image the player picked.
+export async function loadPsxTrack(def, read = fetchBin) {
 	const p = def.path;
 	const [sceneCmp, scenePrm, skyCmp, skyPrm, libCmp, libTtf, trv, trf, trs, tex] = await Promise.all([
-		fetchBin(`${p}/SCENE.CMP`),
-		fetchBin(`${p}/SCENE.PRM`),
-		fetchBin(`${p}/SKY.CMP`),
-		fetchBin(`${p}/SKY.PRM`),
-		fetchBin(`${p}/LIBRARY.CMP`),
-		fetchBin(`${p}/LIBRARY.TTF`),
-		fetchBin(`${p}/TRACK.TRV`),
-		fetchBin(`${p}/TRACK.TRF`),
-		fetchBin(`${p}/TRACK.TRS`),
-		def.tex ? fetchBin(`${p}/TRACK.TEX`) : Promise.resolve(null)
+		read(`${p}/SCENE.CMP`),
+		read(`${p}/SCENE.PRM`),
+		read(`${p}/SKY.CMP`),
+		read(`${p}/SKY.PRM`),
+		read(`${p}/LIBRARY.CMP`),
+		read(`${p}/LIBRARY.TTF`),
+		read(`${p}/TRACK.TRV`),
+		read(`${p}/TRACK.TRF`),
+		read(`${p}/TRACK.TRS`),
+		def.tex ? read(`${p}/TRACK.TEX`) : Promise.resolve(null)
 	]);
 
 	// Track geometry and racing line (in raw PSX units, converted axes)
@@ -404,6 +406,7 @@ function readObjects(buf) {
 	const objects = [];
 	let o = 0;
 	while (o + 144 <= buf.byteLength) {
+		const name = new TextDecoder().decode(new Uint8Array(buf, o, 15)).replace(/\0.*$/s, '');
 		const vertexCount = v.getUint16(o + 16);
 		const polygonCount = v.getUint16(o + 32);
 		const position = new THREE.Vector3(v.getInt32(o + 116), -v.getInt32(o + 120), -v.getInt32(o + 124));
@@ -422,12 +425,17 @@ function readObjects(buf) {
 			polys.push(p);
 			o += def.size;
 		}
-		objects.push({ position, verts, polys, view: v });
+		objects.push({ name, position, verts, polys, view: v });
 	}
 	return objects;
 }
 
-function buildPrmScene(prmBuf, cmpBuf, { sky = false } = {}) {
+// Each object of a PRM file as its own mesh (ships, weapon models): [{name, mesh}]
+export function prmObjectMeshes(prmBuf, cmpBuf) {
+	return buildPrmScene(prmBuf, cmpBuf, { perObject: true });
+}
+
+function buildPrmScene(prmBuf, cmpBuf, { sky = false, perObject = false } = {}) {
 	const images = cmpBuf ? unpackImages(cmpBuf).map(readImage) : [];
 	const side = THREE.DoubleSide;
 	const materials = images.map((img) => (img ? texturedMaterial(img, side) : null));
@@ -445,10 +453,12 @@ function buildPrmScene(prmBuf, cmpBuf, { sky = false } = {}) {
 	// Every object is baked into one mesh (one draw call per material), which
 	// matters on standalone headsets: a scene has hundreds of small objects.
 	const color = new THREE.Color();
-	const byMat = new Map();
+	let byMat = new Map();
+	const perObjectOut = [];
 	for (const obj of readObjects(prmBuf)) {
 		const v = obj.view;
-		const o = obj.position;
+		const o = perObject ? new THREE.Vector3() : obj.position;
+		if (perObject) byMat = new Map();
 		const push = (mi, p, c, u, vv) => {
 			if (!byMat.has(mi)) byMat.set(mi, { pos: [], col: [], uv: [] });
 			const b = byMat.get(mi);
@@ -507,7 +517,9 @@ function buildPrmScene(prmBuf, cmpBuf, { sky = false } = {}) {
 				for (const k of tri) push(mi, obj.verts[idx[k]], cols[k], uvs ? uvs[k][0] : 0, uvs ? uvs[k][1] : 0);
 			}
 		}
+		if (perObject && byMat.size) perObjectOut.push({ name: obj.name, mesh: mergeGroups(byMat, materials) });
 	}
+	if (perObject) return perObjectOut;
 	if (!byMat.size) return [];
 	const mesh = mergeGroups(byMat, materials);
 	if (sky) mesh.renderOrder = -10;

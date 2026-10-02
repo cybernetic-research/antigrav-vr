@@ -124,7 +124,9 @@ export class WeaponSystem {
 
 	_spawn(kind, owner, s, x, vs, vx, life) {
 		const mesh = new THREE.Group();
-		const body = new THREE.Mesh(this.bodyGeo[kind], kind === 'mine' ? this.mineMat : this.bodyMat);
+		// add-ons can supply their own models: WeaponSystem.models[kind]() -> Object3D
+		const custom = WeaponSystem.models?.[kind];
+		const body = custom ? custom() : new THREE.Mesh(this.bodyGeo[kind], kind === 'mine' ? this.mineMat : this.bodyMat);
 		mesh.add(body);
 		const g = new THREE.Sprite(this.mats[kind]);
 		g.scale.setScalar(kind === 'mine' ? 1.6 : kind === 'missile' ? 2.4 : 1.6);
