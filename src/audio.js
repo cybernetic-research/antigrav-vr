@@ -30,6 +30,10 @@ export class Audio {
 		this.musicGain.connect(ctx.destination);
 		if (this.music.el) ctx.createMediaElementSource(this.music.el).connect(this.musicGain);
 		this.synth = new SynthMusic(ctx, this.musicGain, this.noiseBuf);
+		this.voiceGain = ctx.createGain();
+		this.voiceGain.gain.value = 1.0;
+		this.voiceGain.connect(ctx.destination);
+		this._loadVoices();
 		if (this.music.wanted) this.playMusic(this.music.mode, false);
 
 		this.noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
@@ -228,6 +232,111 @@ export class Audio {
 		m.index = i;
 		m.el.src = m.list[i].url;
 		m.el.play().catch((e) => console.warn('music:', e.message));
+	}
+
+	// --- Announcer ---------------------------------------------------------------------
+	_loadVoices() {
+		const ids = ['three', 'two', 'one', 'go', 'rockets', 'missile', 'mines', 'autopilot', 'autopilot_on', 'autopilot_off',
+			'contender_eliminated', 'opponent_destroyed', 'player_eliminated', 'shield_critical', 'missile_incoming',
+			'final_lap', 'lap_two', 'lap_three', 'lap_four', 'race_complete', 'wrong_way'];
+		this.voices = {};
+		this.voiceQueue = [];
+		this.voiceBusyUntil = 0;
+		for (const id of ids) {
+			fetch(`assets/voice/${id}.m4a`)
+				.then((r) => r.arrayBuffer())
+				.then((b) => this.ctx.decodeAudioData(b))
+				.then((buf) => (this.voices[id] = buf))
+				.catch(() => {});
+		}
+	}
+
+	// Queue an announcer line; urgent lines jump the queue. Music ducks under the voice.
+	say(id, urgent = false) {
+		if (!this.ctx || !this.voices?.[id]) return;
+		if (urgent) this.voiceQueue.unshift(id);
+		else if (this.voiceQueue.length < 2) this.voiceQueue.push(id);
+		this._pumpVoice();
+	}
+
+	_pumpVoice() {
+		const t = this.ctx.currentTime;
+		if (t < this.voiceBusyUntil || !this.voiceQueue.length) {
+			if (this.voiceQueue.length && !this._voiceTimer) {
+				this._voiceTimer = setTimeout(() => {
+					this._voiceTimer = null;
+					this._pumpVoice();
+				}, (this.voiceBusyUntil - t) * 1000 + 20);
+			}
+			return;
+		}
+		const buf = this.voices[this.voiceQueue.shift()];
+		const src = this.ctx.createBufferSource();
+		src.buffer = buf;
+		src.connect(this.voiceGain);
+		src.start();
+		this.voiceBusyUntil = t + buf.duration;
+		const g = this.musicGain.gain;
+		g.cancelScheduledValues(t);
+		g.setTargetAtTime(0.22, t, 0.05);
+		g.setTargetAtTime(0.55, t + buf.duration, 0.3);
+		if (this.voiceQueue.length) this._pumpVoice();
+	}
+
+	// --- Weapon sounds -----------------------------------------------------------------
+	launch() {
+		if (!this.ctx) return;
+		const ctx = this.ctx;
+		const t = ctx.currentTime;
+		const src = ctx.createBufferSource();
+		src.buffer = this.noiseBuf;
+		const f = ctx.createBiquadFilter();
+		f.type = 'bandpass';
+		f.Q.value = 1.5;
+		f.frequency.setValueAtTime(2500, t);
+		f.frequency.exponentialRampToValueAtTime(400, t + 0.5);
+		const g = ctx.createGain();
+		g.gain.setValueAtTime(0.6, t);
+		g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+		src.connect(f).connect(g).connect(this.master);
+		src.start(t, Math.random());
+		src.stop(t + 0.65);
+	}
+
+	// strength 0..1, pan -1..1
+	explosion(strength = 1, pan = 0) {
+		if (!this.ctx) return;
+		const ctx = this.ctx;
+		const t = ctx.currentTime;
+		const p = ctx.createStereoPanner();
+		p.pan.value = Math.max(-1, Math.min(1, pan));
+		p.connect(this.master);
+		const src = ctx.createBufferSource();
+		src.buffer = this.noiseBuf;
+		const f = ctx.createBiquadFilter();
+		f.type = 'lowpass';
+		f.frequency.setValueAtTime(1800, t);
+		f.frequency.exponentialRampToValueAtTime(120, t + 0.9);
+		const g = ctx.createGain();
+		g.gain.setValueAtTime(0.9 * strength, t);
+		g.gain.exponentialRampToValueAtTime(0.001, t + 1.1);
+		src.connect(f).connect(g).connect(p);
+		src.start(t, Math.random());
+		src.stop(t + 1.2);
+		const o = ctx.createOscillator();
+		o.frequency.setValueAtTime(90, t);
+		o.frequency.exponentialRampToValueAtTime(30, t + 0.5);
+		const og = ctx.createGain();
+		og.gain.setValueAtTime(0.8 * strength, t);
+		og.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+		o.connect(og).connect(p);
+		o.start(t);
+		o.stop(t + 0.65);
+	}
+
+	pickup() {
+		this.beep(880, 0.08, 0.2);
+		setTimeout(() => this.beep(1320, 0.12, 0.2), 70);
 	}
 
 	click() {

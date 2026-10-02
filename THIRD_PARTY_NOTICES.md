@@ -25,3 +25,10 @@ decompressor and the TIM image decoder. The project is published under the MIT L
 
 Loaded at runtime from the jsDelivr CDN. Copyright (c) 2010-2025 three.js authors.
 <https://github.com/mrdoob/three.js/blob/dev/LICENSE>
+
+## Announcer voice
+
+The clips in `assets/voice/` were generated for this project with eSpeak NG
+(<https://github.com/espeak-ng/espeak-ng>, GPL-3.0) via `tools/make-voice.sh`. eSpeak NG itself is not
+distributed here. Its audio output isn't covered by its licence, and the clips are released under
+this project's MIT License.

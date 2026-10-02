@@ -9,7 +9,8 @@ import { buildShip, buildCockpit, TEAMS, shipClass, EYE_IN_SHIP } from './shipMo
 import { Input } from './input.js';
 import { Audio } from './audio.js';
 import { CanvasPanel, Pointers, COLORS } from './ui.js';
-import { DashHUD, Banner, formatTime } from './hud.js';
+import { CockpitHUD, Banner, formatTime } from './hud.js';
+import { WeaponSystem, aiUseWeapon } from './weapons.js';
 
 // Working title. Deliberately not the name of the game that inspired it.
 const TITLE = 'ANTIGRAV';
@@ -26,6 +27,9 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'hi
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+// Filmic tone mapping tames the brights and gives a less "toy" look
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.8;
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local'); // seated: origin = head position at session start
 renderer.xr.setFoveation?.(1);
@@ -40,10 +44,38 @@ const rig = new THREE.Group(); // the pilot's eye point; camera + controllers li
 rig.add(camera);
 scene.add(rig);
 
-scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x3a3050, 2.2));
-const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+scene.add(new THREE.HemisphereLight(0xb8c8ff, 0x201828, 1.1));
+const sun = new THREE.DirectionalLight(0xfff2e0, 1.8);
 sun.position.set(0.4, 1, 0.3);
 scene.add(sun);
+scene.environment = buildEnvironmentMap(renderer);
+
+// A dark "studio" with a few soft light panels, prefiltered for reflections on
+// ship paint, metal and canopies.
+function buildEnvironmentMap(renderer) {
+	const env = new THREE.Scene();
+	const sphere = new THREE.Mesh(
+		new THREE.SphereGeometry(10, 32, 16),
+		new THREE.ShaderMaterial({
+			side: THREE.BackSide,
+			vertexShader: 'varying vec3 p; void main(){ p = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+			fragmentShader: 'varying vec3 p; void main(){ float h = normalize(p).y; vec3 c = mix(vec3(0.02,0.02,0.03), vec3(0.10,0.13,0.22), smoothstep(-0.2,0.8,h)); gl_FragColor = vec4(c,1.0); }'
+		})
+	);
+	env.add(sphere);
+	const panelMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+	for (const [x, y, z, w, h, k] of [[0, 8, 0, 10, 2, 3], [7, 3, -4, 3, 5, 1.2], [-7, 3, 4, 3, 5, 1.0], [0, 2, 9, 6, 1, 0.8]]) {
+		const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), panelMat.clone());
+		p.material.color.setScalar(k);
+		p.position.set(x, y, z);
+		p.lookAt(0, 0, 0);
+		env.add(p);
+	}
+	const pmrem = new THREE.PMREMGenerator(renderer);
+	const rt = pmrem.fromScene(env, 0.02);
+	pmrem.dispose();
+	return rt.texture;
+}
 
 addEventListener('resize', () => {
 	camera.aspect = innerWidth / innerHeight;
@@ -235,6 +267,7 @@ helpPanel.setDraw((ctx, p) => {
 		['Brake', 'Left trigger'],
 		['Steer', 'Thumbstick'],
 		['Airbrakes', 'Grip buttons (L / R)'],
+		['Fire weapon', 'A or X'],
 		['Pause', 'B or Y'],
 		['', null],
 		['KEYBOARD / GAMEPAD', null],
@@ -242,6 +275,7 @@ helpPanel.setDraw((ctx, p) => {
 		['Brake', 'S / Down  -  LT'],
 		['Steer', 'A D / Left Right  -  stick'],
 		['Airbrakes', 'Q / E  -  LB / RB'],
+		['Fire weapon', 'F / Enter  -  X / B'],
 		['Pause', 'Esc / P  -  Start']
 	];
 	let y = 150;
@@ -255,7 +289,7 @@ helpPanel.setDraw((ctx, p) => {
 		y += 56;
 	}
 	p.text('Airbrakes tighten your line through fast corners.', 512, y + 30, { size: 26, align: 'center', color: COLORS.dim, weight: 'normal' });
-	p.text('Blue chevrons on the track are boost pads.', 512, y + 66, { size: 26, align: 'center', color: COLORS.dim, weight: 'normal' });
+	p.text('Blue chevrons boost you; target tiles give you a weapon.', 512, y + 66, { size: 26, align: 'center', color: COLORS.dim, weight: 'normal' });
 	p.text('Seated play recommended. Recenter: hold the Oculus button.', 512, y + 102, { size: 26, align: 'center', color: COLORS.dim, weight: 'normal' });
 });
 
@@ -277,6 +311,7 @@ function showTitle() {
 	scene.add(rig);
 	rig.position.set(0, 0, 0);
 	rig.quaternion.identity();
+	camera.rotation.set(0, 0, 0);
 	pointers.setPanels([menuPanel]);
 	audio.setRacing(false);
 	loadingMessage = '';
@@ -395,9 +430,10 @@ function setupRace(track) {
 		craft.baseSkill = skill;
 		craft.isPlayer = isPlayer;
 		craft.name = isPlayer ? 'YOU' : AI_NAMES[i % AI_NAMES.length];
+		craft.colorCss = '#' + team.liveries[liveryIndex % team.liveries.length].glow.toString(16).padStart(6, '0');
 		crafts.push(craft);
 		pilots.push(isPlayer ? null : new AIPilot(craft, { lane: ((i % 3) - 1) * 1.5, aggression: 0.95 + Math.random() * 0.1 }));
-		const mesh = buildShip(team, liveryIndex, { cockpit: isPlayer });
+		const mesh = buildShip(team, liveryIndex, { cockpit: isPlayer, number: i + 1 });
 		group.add(mesh);
 		meshes.push(mesh);
 	}
@@ -420,8 +456,11 @@ function setupRace(track) {
 		rig.position.set(0, 2.2, 11);
 		rig.rotation.x = -0.12;
 	}
+	// On a flat screen, look slightly down so the cockpit screens are in view
+	// (in VR the headset pose replaces this)
+	camera.rotation.set(params.get('view') === 'chase' ? 0 : -0.2, 0, 0);
 
-	const hud = new DashHUD(cockpit.hudMount);
+	const hud = new CockpitHUD(cockpit.hudMounts, path);
 	const banner = new Banner(rigMount);
 
 	const pausePanel = makeOverlayPanel(rigMount, 1024, 640, 1.0);
@@ -458,8 +497,12 @@ function setupRace(track) {
 		shake: 0,
 		resultsAt: 0,
 		lights: track.group.getObjectByName('startLights'),
-		autopilot: params.get('autopilot') === '1' ? new AIPilot(player, { lane: 0 }) : null
+		autopilot: params.get('autopilot') === '1' ? new AIPilot(player, { lane: 0 }) : null,
+		assist: new AIPilot(player, { lane: 0 }), // drives during the autopilot pickup
+		shieldWarned: false,
+		lastWrongWay: 0
 	};
+	race.weapons = new WeaponSystem(path, group, crafts, weaponEvents(race));
 	state = 'countdown';
 	pointers.setPanels([]);
 	audio.setRacing(true);
@@ -515,8 +558,54 @@ function disposeRace() {
 function standings() {
 	const r = race;
 	const done = r.finishOrder;
-	const rest = r.crafts.filter((c) => !c.finished).sort((a, b) => b.progress - a.progress);
+	const rest = r.crafts.filter((c) => !c.finished).sort((a, b) => a.eliminated - b.eliminated || b.progress - a.progress);
 	return done.concat(rest);
+}
+
+function weaponEvents(r) {
+	const nearPlayer = (c) => {
+		const d = c.position.distanceTo(r.player.position);
+		return { strength: Math.max(0.15, 1 - d / 150), pan: _v.subVectors(c.position, r.player.position).dot(r.player.frame.right) / Math.max(d, 1) };
+	};
+	return {
+		pickup(c, w) {
+			if (!c.isPlayer) return;
+			audio.pickup();
+			audio.say(w.id);
+		},
+		fired(c, w, target) {
+			if (c.isPlayer || c.position.distanceTo(r.player.position) < 80) audio.launch();
+			if (w.id === 'missile' && target === r.player) audio.say('missile_incoming', true);
+		},
+		hit(target) {
+			const n = nearPlayer(target);
+			audio.explosion(n.strength * 0.8, n.pan);
+			if (target.isPlayer) {
+				r.shake = 1;
+				haptic(1);
+			}
+		},
+		eliminated(target, by) {
+			const n = nearPlayer(target);
+			audio.explosion(n.strength, n.pan);
+			const i = r.crafts.indexOf(target);
+			r.meshes[i].visible = target.isPlayer; // keep your own cockpit
+			if (target.isPlayer) {
+				audio.say('player_eliminated', true);
+				r.banner.show('ELIMINATED', elapsed, 3, '#ff4040');
+				r.resultsAt = elapsed + 4;
+			} else {
+				audio.say(by === r.player ? 'opponent_destroyed' : 'contender_eliminated');
+				if (by === r.player) r.banner.show('OPPONENT DESTROYED', elapsed, 1.6, '#ff9a3d');
+			}
+		},
+		autopilot(c, on) {
+			if (c.isPlayer && on) {
+				audio.say('autopilot_on');
+				r.banner.show('AUTOPILOT', elapsed, 1.2, '#40ff80');
+			}
+		}
+	};
 }
 
 function stepRace(dt) {
@@ -529,7 +618,8 @@ function stepRace(dt) {
 		const count = Math.ceil(-r.time);
 		if (count !== r.lastCount && count <= 3) {
 			r.banner.show(String(count), now, 0.9, COLORS.text);
-			audio.beep(520, 0.2);
+			audio.beep(520, 0.12, 0.15);
+			audio.say(['', 'one', 'two', 'three'][count], true);
 			setLight(3 - count, 0xff2020);
 		}
 		r.lastCount = count;
@@ -540,9 +630,18 @@ function stepRace(dt) {
 	const pc = r.player;
 	if (r.autopilot || pc.finished) {
 		(r.autopilot || (r.autopilot = new AIPilot(pc, { lane: 0 }))).update(dt, r.crafts);
+	} else if (pc.autopilotTime > 0) {
+		r.assist.update(dt, r.crafts);
+		pc.autopilotTime -= dt;
+		if (pc.autopilotTime <= 0) {
+			audio.say('autopilot_off');
+			r.banner.show('MANUAL', now, 1.0, COLORS.accent2);
+		}
 	} else {
 		Object.assign(pc.input, inp);
 	}
+	if (input.firePressed && state === 'race' && !pc.finished) r.weapons.fire(pc);
+	if (pc.eliminated) Object.assign(pc.input, { steer: 0, thrust: 0, brake: 0, airL: 0, airR: 0 });
 
 	// Fixed-step physics
 	r.acc += dt;
@@ -553,7 +652,8 @@ function stepRace(dt) {
 		if (wasCounting && r.time >= 0) {
 			r.banner.show('GO!', now, 1.0, '#40ff80');
 			if (audio.songTitle) r.songAt = now + 1.3;
-			audio.beep(1040, 0.5);
+			audio.beep(1040, 0.3, 0.15);
+			audio.say('go', true);
 			setLight(-1, 0x20ff40);
 			state = 'race';
 		}
@@ -561,6 +661,10 @@ function stepRace(dt) {
 		for (let i = 0; i < r.crafts.length; i++) {
 			const c = r.crafts[i];
 			const pilot = r.pilots[i];
+			if (c.eliminated) continue;
+			r.weapons.tryPickup(c, r.time);
+			if (r.time - c.lastHit > 3) c.energy = Math.min(100, c.energy + 4 * PHYS_DT);
+			if (pilot) aiUseWeapon(c, r.crafts, r.weapons, r.time);
 			if (pilot) {
 				// gentle rubber banding around the player
 				const d = c.progress - pc.progress;
@@ -574,8 +678,10 @@ function stepRace(dt) {
 				c.finishTime = r.time;
 				r.finishOrder.push(c);
 			}
+			if (c.energy <= 0 && !c.eliminated) r.weapons.eliminate(c, null);
 		}
 		collideCrafts(r.crafts);
+		r.weapons.step(PHYS_DT, r.time);
 		if (pc.wallHit > 0.05) r.shake = Math.max(r.shake, pc.wallHit);
 		if (pc.boostHit) audio.whoosh();
 	}
@@ -589,7 +695,8 @@ function stepRace(dt) {
 	if (pc.lap !== r.playerLap) {
 		if (pc.lap > r.playerLap && pc.lap > 1 && pc.lap <= r.laps) {
 			r.banner.show(pc.lap === r.laps ? 'FINAL LAP' : `LAP ${pc.lap}`, now, 1.6);
-			audio.beep(880, 0.15);
+			audio.beep(880, 0.15, 0.15);
+			audio.say(pc.lap === r.laps ? 'final_lap' : ['', '', 'lap_two', 'lap_three', 'lap_four'][pc.lap] || 'final_lap');
 		}
 		r.playerLap = pc.lap;
 	}
@@ -597,10 +704,20 @@ function stepRace(dt) {
 		const pos = r.finishOrder.indexOf(pc) + 1;
 		r.banner.show(pos === 1 ? 'WINNER!' : `FINISHED ${ordinal(pos)}`, now, 3.5, pos === 1 ? '#40ff80' : COLORS.accent2);
 		r.resultsAt = now + 3.5;
-		audio.beep(1320, 0.4);
+		audio.beep(1320, 0.3, 0.15);
+		audio.say('race_complete');
 	}
-	if (pc.wrongWay > 1.2 && !pc.finished && (now % 1) < dt * 2) r.banner.show('WRONG WAY', now, 0.8, '#ff4040');
+	if (pc.wrongWay > 1.2 && !pc.finished && now - r.lastWrongWay > 3) {
+		r.lastWrongWay = now;
+		r.banner.show('WRONG WAY', now, 0.8, '#ff4040');
+		audio.say('wrong_way');
+	}
+	if (pc.energy < 25 && !pc.eliminated && !r.shieldWarned) {
+		r.shieldWarned = true;
+		audio.say('shield_critical', true);
+	} else if (pc.energy > 40) r.shieldWarned = false;
 	if (r.resultsAt && now >= r.resultsAt && state === 'race') showResults();
+	if (pc.eliminated && !r.resultsAt) r.resultsAt = now + 3;
 
 	updateVisuals(dt, now);
 }
@@ -654,6 +771,8 @@ function updateVisuals(dt, now) {
 		r.rigMount.quaternion.copy(shipQ.invert().multiply(desired));
 	}
 
+	r.weapons.updateVisuals(now);
+
 	// Sky follows the camera
 	if (r.track.sky) r.track.sky.position.copy(camera.getWorldPosition(_v));
 
@@ -670,7 +789,12 @@ function updateVisuals(dt, now) {
 		total: r.crafts.length,
 		lapTime: r.time > 0 && pc.lap >= 1 ? r.time - pc.lapStart : 0,
 		bestLap: best,
-		boosting: pc.boostTime > 0
+		boosting: pc.boostTime > 0,
+		energy: pc.energy,
+		weapon: pc.weapon,
+		player: pc,
+		crafts: r.crafts,
+		projectiles: r.weapons.projectiles
 	});
 	r.banner.update(now);
 
@@ -716,7 +840,7 @@ function showResults() {
 			const col = c.isPlayer ? COLORS.accent2 : COLORS.text;
 			p.text(String(i + 1), 80, y, { size: 34, color: col });
 			p.text(c.name, 180, y, { size: 34, color: col });
-			p.text(c.finished ? formatTime(c.finishTime) : 'racing', 640, y, { size: 30, color: col, weight: 'normal' });
+			p.text(c.finished ? formatTime(c.finishTime) : c.eliminated ? 'OUT' : 'racing', 640, y, { size: 30, color: c.eliminated ? '#ff4040' : col, weight: 'normal' });
 			p.text(c.lapTimes.length ? formatTime(Math.min(...c.lapTimes)) : '--', 800, y, { size: 30, color: col, weight: 'normal' });
 			y += 54;
 		});

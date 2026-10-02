@@ -55,42 +55,67 @@ export function shipClass(cls, team) {
 	return { name: cls.name, maxSpeed: cls.maxSpeed * t.speed, accel: cls.accel * t.accel, turn: cls.turn * t.turn, grip: cls.grip * t.grip };
 }
 
-// Loft a hull through cross-section rings. Each ring: [z, halfWidth, height, yBase]
-// The section is a flat-bottomed hexagon with a ridge on top.
-function loft(rings, { capFront = true, capBack = true, shape = HEX } = {}) {
-	const m = shape.length;
-	const pos = [];
-	const idx = [];
-	for (const [z, hw, h, y0] of rings) {
-		for (const [sx, sy] of shape) pos.push(sx * hw, y0 + sy * h, z);
+// Loft a hull through cross-section rings. Each ring: [z, halfWidth, height, yBase].
+// Rings are resampled with a smooth curve and the profile is subdivided, so the
+// hull reads as a smooth body rather than a few facets. UVs: u around the
+// profile (0..1), v along the length (0 = nose).
+function loft(rings, { capFront = true, capBack = true, shape = HEX, samples = 28, profileSub = 3 } = {}) {
+	// resample ring parameters along z with Catmull-Rom
+	const curve = (k) => new THREE.CatmullRomCurve3(rings.map((r) => new THREE.Vector3(r[0], r[k], 0)), false, 'centripetal');
+	const cw = curve(1), ch = curve(2), cy = curve(3);
+	const rs = [];
+	for (let i = 0; i <= samples; i++) {
+		const t = i / samples;
+		rs.push([cw.getPoint(t).x, Math.max(0.001, cw.getPoint(t).y), Math.max(0.001, ch.getPoint(t).y), cy.getPoint(t).y]);
 	}
-	for (let r = 0; r < rings.length - 1; r++) {
+	// subdivide the closed profile with a smooth closed curve
+	const prof = new THREE.CatmullRomCurve3(shape.map(([x, y]) => new THREE.Vector3(x, y, 0)), true, 'catmullrom', 0.3);
+	const m = shape.length * profileSub;
+	const pts = [];
+	for (let k = 0; k < m; k++) {
+		const p = prof.getPoint(k / m);
+		pts.push([p.x, p.y]);
+	}
+	const z0 = rs[0][0];
+	const z1 = rs[rs.length - 1][0];
+	const pos = [];
+	const uv = [];
+	const idx = [];
+	const cols = m + 1; // seam column duplicated for continuous UVs
+	for (const [z, hw, h, y0] of rs) {
+		for (let k = 0; k <= m; k++) {
+			const [sx, sy] = pts[k % m];
+			pos.push(sx * hw, y0 + sy * h, z);
+			uv.push(k / m, (z - z0) / (z1 - z0));
+		}
+	}
+	for (let r = 0; r < rs.length - 1; r++) {
 		for (let k = 0; k < m; k++) {
-			const a = r * m + k;
-			const b = r * m + ((k + 1) % m);
-			const c = a + m;
-			const d = b + m;
+			const a = r * cols + k;
+			const b = a + 1;
+			const c = a + cols;
+			const d = b + cols;
 			idx.push(a, c, b, b, c, d);
 		}
 	}
 	const addCap = (r, flip) => {
 		const centre = pos.length / 3;
-		const [z, , h, y0] = rings[r];
+		const [z, , h, y0] = rs[r];
 		pos.push(0, y0 + h * 0.45, z);
+		uv.push(0.5, r === 0 ? 0 : 1);
 		for (let k = 0; k < m; k++) {
-			const a = r * m + k;
-			const b = r * m + ((k + 1) % m);
-			flip ? idx.push(centre, b, a) : idx.push(centre, a, b);
+			const a = r * cols + k;
+			flip ? idx.push(centre, a + 1, a) : idx.push(centre, a, a + 1);
 		}
 	};
 	if (capFront) addCap(0, false);
-	if (capBack) addCap(rings.length - 1, true);
+	if (capBack) addCap(rs.length - 1, true);
 	const g = new THREE.BufferGeometry();
 	g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+	g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
 	g.setIndex(idx);
-	const ng = g.toNonIndexed();
-	ng.computeVertexNormals();
-	return ng;
+	g.computeVertexNormals();
+	return g;
 }
 
 const HEX = [[-1.0, 0.0], [-1.0, 0.45], [-0.55, 0.95], [0.0, 1.0], [0.55, 0.95], [1.0, 0.45], [1.0, 0.0], [0.4, -0.12], [-0.4, -0.12]];
@@ -168,7 +193,7 @@ function meridian(ship, m, cockpit) {
 	fin.position.set(0, 0.6, 2.3);
 	ship.add(fin);
 	ship.add(box(0.08, 0.1, 0.6, m.accent, 0, 1.78, 2.7));
-	return { glows: [[-2.55, 0.3, 3.05, 0.9], [2.55, 0.3, 3.05, 0.9], [0, 0.4, 3.0, 1.2]], canopy: [0, 0.62, -0.1] };
+	return { glows: [[-2.55, 0.3, 3.05, 0.9], [2.55, 0.3, 3.05, 0.9], [0, 0.4, 3.0, 1.2]], canopy: [0, 0.62, -0.1], span: 2.7, navZ: 2.2 };
 }
 
 // --- Corvid "Kite": slim needle fuselage, twin tail booms joined by a high rear
@@ -196,7 +221,7 @@ function kite(ship, m, cockpit) {
 	}
 	// high rear wing between the boom fins
 	ship.add(box(3.5, 0.06, 0.5, m.trim, 0, 1.28, 3.05));
-	return { glows: [[0, 0.34, 3.35, 1.3], [-1.7, 0.2, 3.4, 0.55], [1.7, 0.2, 3.4, 0.55]], canopy: [0, 0.62, -0.2] };
+	return { glows: [[0, 0.34, 3.35, 1.3], [-1.7, 0.2, 3.4, 0.55], [1.7, 0.2, 3.4, 0.55]], canopy: [0, 0.62, -0.2], span: 1.72, navZ: -1.6 };
 }
 
 // --- Mamut "Bastion": wide, low wedge with two big integrated engine blocks,
@@ -217,30 +242,109 @@ function bastion(ship, m, cockpit) {
 		fin.position.set(side * 1.3, 0.72, 2.6);
 		ship.add(fin);
 	}
-	return { glows: [[-1.15, 0.38, 3.45, 1.4], [1.15, 0.38, 3.45, 1.4]], canopy: [0, 0.62, -0.2] };
+	return { glows: [[-1.15, 0.38, 3.45, 1.4], [1.15, 0.38, 3.45, 1.4]], canopy: [0, 0.62, -0.2], span: 1.68, navZ: 0.0 };
 }
 
 const HULLS = { meridian, kite, bastion };
 
+const NAV_RED = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
+const NAV_GREEN = new THREE.MeshBasicMaterial({ color: 0x2aff6a });
+
+// Painted livery: base colour, panel lines, a trim stripe over the top and the
+// race number on both flanks. Mapped with the loft UVs (u around, v along).
+const liveryCache = new Map();
+function liveryTexture(livery, number) {
+	const key = `${livery.base}-${livery.trim}-${livery.accent}-${number}`;
+	if (liveryCache.has(key)) return liveryCache.get(key);
+	const c = document.createElement('canvas');
+	c.width = 512;
+	c.height = 512;
+	const ctx = c.getContext('2d');
+	const hex = (v) => '#' + v.toString(16).padStart(6, '0');
+	ctx.fillStyle = hex(livery.base);
+	ctx.fillRect(0, 0, 512, 512);
+	// subtle paint variation
+	const g = ctx.createLinearGradient(0, 0, 0, 512);
+	g.addColorStop(0, 'rgba(255,255,255,0.06)');
+	g.addColorStop(1, 'rgba(0,0,0,0.12)');
+	ctx.fillStyle = g;
+	ctx.fillRect(0, 0, 512, 512);
+	// trim stripe over the top (profile top sits around u = 0.33)
+	ctx.fillStyle = hex(livery.trim);
+	ctx.fillRect(150, 0, 40, 512);
+	ctx.fillStyle = hex(livery.accent);
+	ctx.fillRect(142, 0, 6, 512);
+	ctx.fillRect(192, 0, 6, 512);
+	// panel lines
+	ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+	ctx.lineWidth = 2;
+	for (const v of [70, 150, 260, 330, 420]) {
+		ctx.beginPath();
+		ctx.moveTo(0, v);
+		ctx.lineTo(512, v);
+		ctx.stroke();
+	}
+	for (const u of [60, 120, 230, 290, 400, 460]) {
+		ctx.beginPath();
+		ctx.moveTo(u, 0);
+		ctx.lineTo(u, 512);
+		ctx.stroke();
+	}
+	// small hatch / vent details
+	ctx.fillStyle = 'rgba(0,0,0,0.3)';
+	for (const [x, y] of [[70, 280], [400, 280], [250, 90], [250, 440]]) {
+		for (let i = 0; i < 5; i++) ctx.fillRect(x + i * 8, y, 4, 26);
+	}
+	// race number on the flanks (u ~ 0.08 and ~ 0.6)
+	if (number) {
+		ctx.save();
+		ctx.font = 'italic bold 64px sans-serif';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		for (const u of [40, 310]) {
+			ctx.save();
+			ctx.translate(u, 300);
+			ctx.rotate(Math.PI / 2);
+			ctx.fillStyle = hex(livery.trim);
+			ctx.fillText(String(number), 0, 0);
+			ctx.restore();
+		}
+		ctx.restore();
+	}
+	const t = new THREE.CanvasTexture(c);
+	t.colorSpace = THREE.SRGBColorSpace;
+	t.anisotropy = 4;
+	liveryCache.set(key, t);
+	return t;
+}
+
 // Build a ship. With {cockpit: true} the canopy bubble is omitted (the
 // interior adds its own frame and glass) and the hull stays open over the seat.
-export function buildShip(team = TEAMS[0], liveryIndex = 0, { cockpit = false } = {}) {
+export function buildShip(team = TEAMS[0], liveryIndex = 0, { cockpit = false, number = 0 } = {}) {
 	const livery = team.liveries[liveryIndex % team.liveries.length];
 	const ship = new THREE.Group();
+	// double sided: mirrored (negatively scaled) plates flip their winding
+	const paint = (color, opts = {}) => new THREE.MeshStandardMaterial({ color, metalness: 0.35, roughness: 0.32, side: THREE.DoubleSide, ...opts });
 	const m = {
-		// double sided: mirrored (negatively scaled) plates flip their winding
-		body: new THREE.MeshLambertMaterial({ color: livery.base, flatShading: true, side: THREE.DoubleSide }),
-		trim: new THREE.MeshLambertMaterial({ color: livery.trim, flatShading: true, side: THREE.DoubleSide }),
-		accent: new THREE.MeshLambertMaterial({ color: livery.accent, flatShading: true, side: THREE.DoubleSide })
+		body: paint(0xffffff, { map: liveryTexture(livery, number) }),
+		trim: paint(livery.trim),
+		accent: paint(livery.accent, { metalness: 0.5, roughness: 0.4 }),
+		metal: new THREE.MeshStandardMaterial({ color: 0x3a3f48, metalness: 0.85, roughness: 0.35 }),
+		dark: new THREE.MeshStandardMaterial({ color: 0x0c0d10, metalness: 0.4, roughness: 0.6, side: THREE.DoubleSide })
 	};
 	const info = HULLS[team.hull](ship, m, cockpit);
 
-	// Engine glows
+	// Engine nozzles (dark rings) and glows
 	const glowMat = new THREE.SpriteMaterial({ map: glowTexture(livery.glow), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
 	const glows = [];
 	for (const [x, y, z, s] of info.glows) {
+		const r = s * 0.32;
+		const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.15, 0.35, 16, 1, true), m.metal);
+		nozzle.rotation.x = Math.PI / 2;
+		nozzle.position.set(x, y, z - 0.1);
+		ship.add(nozzle);
 		const g = new THREE.Sprite(glowMat);
-		g.position.set(x, y, z);
+		g.position.set(x, y, z + 0.1);
 		g.scale.setScalar(s);
 		g.userData.baseScale = s;
 		ship.add(g);
@@ -248,7 +352,15 @@ export function buildShip(team = TEAMS[0], liveryIndex = 0, { cockpit = false } 
 	}
 	ship.userData.glows = glows;
 
-	// Belly anti-grav strip
+	// Navigation lights on the widest points, an antenna and belly emitters
+	const navY = 0.45;
+	const navX = info.span || 1.8;
+	for (const [x, mat] of [[-navX, NAV_RED], [navX, NAV_GREEN]]) {
+		const l = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), mat);
+		l.position.set(x, navY, info.navZ ?? 0.6);
+		ship.add(l);
+	}
+	ship.add(box(0.02, 0.35, 0.02, m.metal, 0.25, 0.85, 1.4, -0.4));
 	const belly = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 4.2), new THREE.MeshBasicMaterial({ color: livery.glow, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
 	belly.rotation.x = Math.PI / 2;
 	belly.position.set(0, -0.01, -0.3);
@@ -256,12 +368,17 @@ export function buildShip(team = TEAMS[0], liveryIndex = 0, { cockpit = false } 
 
 	if (!cockpit) {
 		const canopy = new THREE.Mesh(
-			new THREE.SphereGeometry(0.55, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2),
-			new THREE.MeshLambertMaterial({ color: 0x0b1420, emissive: 0x0a2840, flatShading: true })
+			new THREE.SphereGeometry(0.55, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+			new THREE.MeshStandardMaterial({ color: 0x0a1018, metalness: 0.9, roughness: 0.08, emissive: 0x05121c })
 		);
 		canopy.scale.set(1, 0.7, 2.0);
 		canopy.position.set(...info.canopy);
 		ship.add(canopy);
+		const rim = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.03, 6, 24), m.metal);
+		rim.rotation.x = Math.PI / 2;
+		rim.scale.set(1, 2.0, 1);
+		rim.position.set(...info.canopy);
+		ship.add(rim);
 	}
 
 	return mergeStatic(ship);
@@ -276,8 +393,9 @@ export function mergeStatic(group) {
 		if (!child.isMesh || child.userData.keep || child.material.transparent || Array.isArray(child.material)) continue;
 		child.updateMatrix();
 		let g = child.geometry.index ? child.geometry.toNonIndexed() : child.geometry.clone();
-		for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal') g.deleteAttribute(name);
+		for (const name of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(name)) g.deleteAttribute(name);
 		if (!g.attributes.normal) g.computeVertexNormals();
+		if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
 		g.applyMatrix4(child.matrix);
 		if (!byMat.has(child.material)) byMat.set(child.material, []);
 		byMat.get(child.material).push(g);
@@ -292,15 +410,13 @@ export function mergeStatic(group) {
 	return group;
 }
 
-// --- Cockpit interior -------------------------------------------------------------
-// Built relative to the pilot's eye point (origin). Returns {group, yoke, hudMount}.
 export const EYE_IN_SHIP = new THREE.Vector3(0, 1.08, 0.15);
 
 export function buildCockpit(livery = TEAMS[0].liveries[0]) {
 	const g = new THREE.Group();
-	const panel = new THREE.MeshLambertMaterial({ color: 0x2a2e37, flatShading: true });
-	const panelDark = new THREE.MeshLambertMaterial({ color: 0x15171c, flatShading: true });
-	const frameMat = new THREE.MeshLambertMaterial({ color: livery.base, flatShading: true });
+	const panel = new THREE.MeshStandardMaterial({ color: 0x1c1f25, metalness: 0.3, roughness: 0.75 });
+	const panelDark = new THREE.MeshStandardMaterial({ color: 0x0d0e11, metalness: 0.2, roughness: 0.9 });
+	const frameMat = new THREE.MeshStandardMaterial({ color: 0x2c3038, metalness: 0.8, roughness: 0.35 });
 	const trimMat = new THREE.MeshBasicMaterial({ color: livery.trim });
 	const glowMat = new THREE.MeshBasicMaterial({ color: livery.glow });
 	const lightRed = new THREE.MeshBasicMaterial({ color: 0xff4040 });
@@ -320,10 +436,27 @@ export function buildCockpit(livery = TEAMS[0].liveries[0]) {
 	g.add(dashLip);
 
 	// HUD screen mount, sits on top of the cowl and faces the pilot
-	const hudMount = new THREE.Group();
-	hudMount.position.set(0, rimY + 0.15, -0.66);
-	hudMount.rotation.x = -0.35;
-	g.add(hudMount);
+	// Three screens kept out of the main line of sight: one low on each side
+	// console angled towards the pilot, and a map/radar screen low on the dash.
+	const mount = (x, y, z, yaw, pitch) => {
+		const m = new THREE.Group();
+		m.position.set(x, y, z);
+		m.rotation.set(pitch, yaw, 0, 'YXZ');
+		g.add(m);
+		return m;
+	};
+	const hudMounts = {
+		left: mount(-0.46, rimY + 0.02, -0.36, 0.7, -0.5),
+		right: mount(0.46, rimY + 0.02, -0.36, -0.7, -0.5),
+		center: mount(0, rimY + 0.04, -0.47, 0, -0.95)
+	};
+	// bezels behind the screens
+	for (const [k, w, h] of [['left', 0.27, 0.15], ['right', 0.27, 0.15], ['center', 0.33, 0.17]]) {
+		const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.02), panelDark);
+		b.position.z = -0.012;
+		b.userData.keep = true;
+		hudMounts[k].add(b);
+	}
 
 	// Side consoles / tub walls
 	for (const side of [-1, 1]) {
@@ -382,7 +515,7 @@ export function buildCockpit(livery = TEAMS[0].liveries[0]) {
 
 	// Steering yoke that turns with the input (purely visual)
 	const yoke = new THREE.Group();
-	yoke.position.set(0, rimY - 0.12, -0.42);
+	yoke.position.set(0, rimY - 0.24, -0.4);
 	yoke.rotation.x = -0.9;
 	const yokeBar = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.035, 0.035), panelDark);
 	yoke.add(yokeBar);
@@ -399,7 +532,7 @@ export function buildCockpit(livery = TEAMS[0].liveries[0]) {
 	g.add(yoke);
 
 	mergeStatic(g);
-	return { group: g, yoke, hudMount };
+	return { group: g, yoke, hudMounts };
 }
 
 function tube(points, radius, material) {

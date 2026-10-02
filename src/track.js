@@ -31,6 +31,7 @@ export class TrackPath {
 		this.hw = new Float32Array(n);
 		this.kappa = new Float32Array(n);
 		this.boosts = []; // {s0, s1, x0, x1}
+		this.weaponPads = []; // same shape
 
 		const np = points.length;
 		const p = new THREE.Vector3();
@@ -159,12 +160,34 @@ export class TrackPath {
 	}
 
 	boostAt(s, x) {
-		s = this.wrap(s);
-		for (const b of this.boosts) {
-			if (s >= b.s0 && s <= b.s1 && x >= b.x0 && x <= b.x1) return true;
-		}
-		return false;
+		return inZone(this.boosts, this.wrap(s), x);
 	}
+
+	weaponAt(s, x) {
+		return inZone(this.weaponPads, this.wrap(s), x);
+	}
+
+	// Long, gentle stretches of track: [{s0, s1}] where |curvature| stays low
+	straights(maxKappa = 0.006, minLen = 110) {
+		const out = [];
+		let start = -1;
+		for (let i = 0; i <= this.count; i++) {
+			const ok = i < this.count && Math.abs(this.kappa[i]) < maxKappa;
+			if (ok && start < 0) start = i;
+			if (!ok && start >= 0) {
+				if ((i - start) * this.step >= minLen) out.push({ s0: start * this.step, s1: i * this.step });
+				start = -1;
+			}
+		}
+		return out;
+	}
+}
+
+function inZone(zones, s, x) {
+	for (const b of zones) {
+		if (s >= b.s0 && s <= b.s1 && x >= b.x0 && x <= b.x1) return true;
+	}
+	return false;
 }
 
 export function newFrame() {

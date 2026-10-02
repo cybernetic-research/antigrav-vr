@@ -33,7 +33,7 @@ function noise(ctx, w, h, amount) {
 // Road: dark panels, seams, centre dashes. u across the track (0..1), v along it.
 export function roadTexture(accent = '#2ad1ff') {
 	const [c, ctx] = canvas(256, 512);
-	ctx.fillStyle = '#23262d';
+	ctx.fillStyle = '#1a1c21';
 	ctx.fillRect(0, 0, 256, 512);
 	noise(ctx, 256, 512, 18);
 	// panel seams
@@ -117,6 +117,36 @@ export function boostTexture() {
 	ctx.strokeStyle = '#7fe8ff';
 	ctx.lineWidth = 6;
 	ctx.strokeRect(3, 3, 122, 250);
+	return toTexture(c, { repeat: false });
+}
+
+// Weapon pad: amber/magenta tile with a target emblem
+export function weaponPadTexture() {
+	const [c, ctx] = canvas(128, 128);
+	ctx.fillStyle = '#2a0a26';
+	ctx.fillRect(0, 0, 128, 128);
+	const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 64);
+	g.addColorStop(0, '#ffb23d');
+	g.addColorStop(1, '#c2186b');
+	ctx.strokeStyle = g;
+	ctx.lineWidth = 9;
+	ctx.beginPath();
+	ctx.arc(64, 64, 36, 0, Math.PI * 2);
+	ctx.stroke();
+	ctx.lineWidth = 7;
+	for (const [x0, y0, x1, y1] of [[64, 8, 64, 40], [64, 88, 64, 120], [8, 64, 40, 64], [88, 64, 120, 64]]) {
+		ctx.beginPath();
+		ctx.moveTo(x0, y0);
+		ctx.lineTo(x1, y1);
+		ctx.stroke();
+	}
+	ctx.fillStyle = '#ffb23d';
+	ctx.beginPath();
+	ctx.arc(64, 64, 9, 0, Math.PI * 2);
+	ctx.fill();
+	ctx.strokeStyle = '#ff4fa8';
+	ctx.lineWidth = 6;
+	ctx.strokeRect(3, 3, 122, 122);
 	return toTexture(c, { repeat: false });
 }
 

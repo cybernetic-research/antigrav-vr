@@ -42,6 +42,14 @@ export class Craft {
 		this.quaternion = new THREE.Quaternion();
 		this.input = { steer: 0, thrust: 0, brake: 0, airL: 0, airR: 0 };
 		this.wrongWay = 0;
+		// combat
+		this.energy = 100;
+		this.weapon = null;
+		this.eliminated = false;
+		this.autopilotTime = 0;
+		this.padCooldown = 0;
+		this.lastHit = -10;
+		this.hitShake = 0;
 	}
 
 	get speed() {
@@ -54,6 +62,11 @@ export class Craft {
 	}
 
 	step(dt, raceTime) {
+		if (this.eliminated) {
+			this.wallHit = 0;
+			this.boostHit = false;
+			return;
+		}
 		const c = this.cls;
 		const inp = this.input;
 		const vmax = c.maxSpeed * this.skill;
@@ -106,15 +119,15 @@ export class Craft {
 		// --- Boost pads -------------------------------------------------------
 		if (this.boostTime > 0) this.boostTime -= dt;
 		if (this.track.boostAt(this.s, this.x) && this.boostCooldown <= 0) {
-			this.boostTime = 1.4;
+			this.boostTime = 2.0;
 			this.boostCooldown = 0.6;
 			this.boostHit = true;
-			const add = 22;
+			const add = 30;
 			this.vf += hx * add;
 			this.vl += hy * add;
 		}
 		this.boostCooldown = (this.boostCooldown || 0) - dt;
-		const cap = vmax * 1.4;
+		const cap = vmax * 1.5;
 		const sp = this.speed;
 		if (sp > cap) {
 			this.vf *= cap / sp;
@@ -150,6 +163,7 @@ export class Craft {
 			const into = -this.vl * side;
 			if (into > 0) {
 				this.wallHit = Math.min(1, into / 25);
+				if (into > 4) this.energy -= this.wallHit * 8; // real impacts (not scrapes) wear the shield
 				this.vl = -this.vl * 0.25;
 				// scrub speed proportional to the impact angle
 				this.vf *= 1 - Math.min(0.5, into / 60);
@@ -199,6 +213,7 @@ export function collideCrafts(crafts) {
 		for (let j = i + 1; j < crafts.length; j++) {
 			const a = crafts[i];
 			const b = crafts[j];
+			if (a.eliminated || b.eliminated) continue;
 			let ds = b.s - a.s;
 			if (ds > L / 2) ds -= L;
 			if (ds < -L / 2) ds += L;

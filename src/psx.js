@@ -23,7 +23,7 @@ export const PSX_TRACKS = Object.entries(DISC_TRACKS).flatMap(([folder, g]) =>
 // Track half width in metres after scaling the PSX units
 const TARGET_HALF_WIDTH = 12.5;
 
-const FACE_FLAGS = { TRACK: 1, WEAPON: 2, FLIP: 4, BOOST: 32 };
+const FACE_FLAGS = { TRACK: 1, WEAPON: 2, FLIP: 4, WEAPON_2: 8, BOOST: 32 }; // WEAPON / WEAPON_2 = pickup pads (left / right)
 const SECTION_FLAGS = { JUMP: 1 };
 
 // Which PSX tracks are present? (HEAD request for each TRACK.TRS)
@@ -265,10 +265,15 @@ function extractLine(sections, faces, vertices) {
 const _t = new THREE.Vector3();
 
 function addBoosts(path, faces, vertices, k) {
+	addZones(path, faces, vertices, k, FACE_FLAGS.BOOST, path.boosts);
+	addZones(path, faces, vertices, k, FACE_FLAGS.WEAPON | FACE_FLAGS.WEAPON_2, path.weaponPads);
+}
+
+function addZones(path, faces, vertices, k, flag, zones) {
 	const f = newFrame();
 	const p = new THREE.Vector3();
 	for (const face of faces) {
-		if (!(face.flags & FACE_FLAGS.BOOST)) continue;
+		if (!(face.flags & flag)) continue;
 		p.set(0, 0, 0);
 		for (const vi of face.indices) p.add(vertices[vi]);
 		p.multiplyScalar(k / 4);
@@ -297,7 +302,7 @@ function addBoosts(path, faces, vertices, k) {
 			x0 = Math.min(x0, x);
 			x1 = Math.max(x1, x);
 		}
-		path.boosts.push({ s0: path.wrap(s0), s1: path.wrap(s0) + (s1 - s0), x0, x1 });
+		zones.push({ s0: path.wrap(s0), s1: path.wrap(s0) + (s1 - s0), x0, x1 });
 	}
 }
 

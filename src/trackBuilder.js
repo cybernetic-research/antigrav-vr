@@ -20,7 +20,9 @@ export function buildBuiltinTrack(def) {
 	group.add(buildDeck(path));
 	const pylons = buildPylons(path);
 	if (pylons) group.add(pylons);
-	group.add(buildBoosts(path, def.boosts || []));
+	const boosts = boostDefs(path, def.boosts || []);
+	group.add(buildPads(path, boosts, path.boosts, T.boostTexture()));
+	group.add(buildPads(path, weaponDefs(path, boosts), path.weaponPads, T.weaponPadTexture()));
 	group.add(buildGantry(path, theme));
 
 	const env = buildEnvironment(path, theme);
@@ -85,7 +87,7 @@ function buildRoad(path, theme) {
 		(f, s) => ({ p: f.pos.clone(), u: 0.5, v: s / texLen }),
 		(f, s) => ({ p: f.pos.clone().addScaledVector(f.right, f.hw), u: 1, v: s / texLen })
 	]);
-	const mat = new THREE.MeshBasicMaterial({ map: T.roadTexture(theme.accent), side: THREE.DoubleSide });
+	const mat = new THREE.MeshLambertMaterial({ map: T.roadTexture(theme.accent), side: THREE.DoubleSide });
 	const mesh = new THREE.Mesh(geo, mat);
 	mesh.name = 'road';
 	return mesh;
@@ -93,7 +95,7 @@ function buildRoad(path, theme) {
 
 function buildWalls(path, theme) {
 	const group = new THREE.Group();
-	const wallMat = new THREE.MeshBasicMaterial({ map: T.wallTexture(theme.stripe), side: THREE.DoubleSide });
+	const wallMat = new THREE.MeshLambertMaterial({ map: T.wallTexture(theme.stripe), side: THREE.DoubleSide });
 	const railMat = new THREE.MeshBasicMaterial({ color: theme.rail, side: THREE.DoubleSide });
 	const texLen = WALL_H * 4;
 	for (const side of [-1, 1]) {
@@ -116,7 +118,7 @@ function buildWalls(path, theme) {
 }
 
 function buildDeck(path) {
-	const mat = new THREE.MeshBasicMaterial({ color: 0x1a1d24, side: THREE.DoubleSide });
+	const mat = new THREE.MeshLambertMaterial({ color: 0x15171c, side: THREE.DoubleSide });
 	const edge = (side) => (f) => ({ p: f.pos.clone().addScaledVector(f.right, side * (f.hw + 0.75)).addScaledVector(f.up, WALL_H), u: 0, v: 0 });
 	const below = (side) => (f) => ({ p: f.pos.clone().addScaledVector(f.right, side * (f.hw + 0.75)).addScaledVector(f.up, -DECK), u: 0, v: 0 });
 	const geo = stripGeometry(path, 4, [edge(-1), below(-1), below(1), edge(1)]);
@@ -142,7 +144,7 @@ function buildPylons(path) {
 	if (!spots.length) return null;
 	const geo = new THREE.CylinderGeometry(1.4, 2.2, 1, 8);
 	geo.translate(0, 0.5, 0);
-	const mat = new THREE.MeshBasicMaterial({ color: 0x2b303b });
+	const mat = new THREE.MeshLambertMaterial({ color: 0x22262e });
 	const inst = new THREE.InstancedMesh(geo, mat, spots.length);
 	const m = new THREE.Matrix4();
 	spots.forEach((sp, i) => {
@@ -171,18 +173,20 @@ function groundLevel(path) {
 	return min - 6;
 }
 
-// --- Boost pads ------------------------------------------------------------------
+// --- Boost and weapon pads ----------------------------------------------------------
 
-function buildBoosts(path, defs) {
+// defs: [{s, x, len, w}] in metres. Registers zones on the path and builds one
+// merged mesh lying on the road.
+function buildPads(path, defs, zones, texture) {
 	const group = new THREE.Group();
-	const mat = new THREE.MeshBasicMaterial({ map: T.boostTexture(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+	const mat = new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, side: THREE.DoubleSide });
 	const f = newFrame();
 	const geos = [];
 	for (const d of defs) {
-		const s0 = d.at * path.length;
+		const s0 = path.wrap(d.s);
 		const len = d.len || 8;
 		const w = d.w || 4;
-		path.boosts.push({ s0, s1: s0 + len, x0: d.x - w / 2, x1: d.x + w / 2 });
+		zones.push({ s0, s1: s0 + len, x0: d.x - w / 2, x1: d.x + w / 2 });
 		const pos = [];
 		const uv = [];
 		const steps = 4;
@@ -206,9 +210,37 @@ function buildBoosts(path, defs) {
 		g.setIndex(idx);
 		geos.push(g);
 	}
-	mat.side = THREE.DoubleSide;
 	if (geos.length) group.add(new THREE.Mesh(mergeGeometries(geos, false), mat));
 	return group;
+}
+
+// Hand-placed boosts plus extra ones on every long straight, so the fast
+// sections really are fast.
+function boostDefs(path, defs) {
+	const out = defs.map((d) => ({ s: d.at * path.length, x: d.x, len: d.len || 8 }));
+	const near = (s) => out.some((d) => Math.abs(path.wrap(d.s - s + path.length / 2) - path.length / 2) < 70);
+	let flip = 1;
+	for (const st of path.straights()) {
+		for (let s = st.s0 + 30; s < st.s1 - 40; s += 200) {
+			if (near(s)) continue;
+			const hw = path.halfWidthAt(s);
+			out.push({ s, x: flip * hw * 0.35, len: 8 });
+			flip = -flip;
+		}
+	}
+	return out;
+}
+
+// Rows of weapon pads spread around the lap, kept clear of boost pads
+function weaponDefs(path, boosts) {
+	const out = [];
+	for (const at of [0.12, 0.37, 0.62, 0.87]) {
+		let s = at * path.length;
+		for (let tries = 0; tries < 10 && boosts.some((b) => Math.abs(b.s - s) < 30); tries++) s += 25;
+		const hw = path.halfWidthAt(s);
+		for (const x of [-hw * 0.45, hw * 0.45]) out.push({ s, x, len: 5, w: 4 });
+	}
+	return out;
 }
 
 // --- Start / finish gantry -----------------------------------------------------
@@ -318,7 +350,7 @@ function buildTowers(path, count, center, radius, ground) {
 		q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI);
 		m.compose(new THREE.Vector3(x, ground, z), q, new THREE.Vector3(w, h, w * (0.6 + Math.random() * 0.8)));
 		inst.setMatrixAt(placed, m);
-		inst.setColorAt(placed, color.setHSL(0.6 + Math.random() * 0.1, 0.2, 0.55 + Math.random() * 0.4));
+		inst.setColorAt(placed, color.setHSL(0.6 + Math.random() * 0.1, 0.2, 0.3 + Math.random() * 0.3));
 		placed++;
 	}
 	inst.count = placed;

@@ -2,9 +2,9 @@
 //
 // VR (Quest Touch / any xr-standard controller):
 //   left stick (or right stick) = steer, right trigger = thrust, left trigger = brake
-//   left/right grip = left/right airbrake, B or Y = pause
-// Keyboard: arrows/WASD steer + thrust/brake, Q/E airbrakes, Esc/P pause
-// Gamepad: left stick steer, RT thrust, LT brake, LB/RB airbrakes, Start pause
+//   left/right grip = left/right airbrake, A or X = fire weapon, B or Y = pause
+// Keyboard: arrows/WASD steer + thrust/brake, Q/E airbrakes, F/Enter/Ctrl fire, Esc/P pause
+// Gamepad: left stick steer, RT thrust, LT brake, LB/RB airbrakes, X/B fire, Start pause
 
 const DEADZONE = 0.12;
 
@@ -19,6 +19,8 @@ export class Input {
 		this.state = { steer: 0, thrust: 0, brake: 0, airL: 0, airR: 0 };
 		this.pausePressed = false; // edge-triggered, true for one frame
 		this._pauseHeld = false;
+		this.firePressed = false; // edge-triggered
+		this._fireHeld = false;
 		this.usingXR = false;
 
 		addEventListener('keydown', (e) => {
@@ -36,6 +38,7 @@ export class Input {
 	update() {
 		const s = { steer: 0, thrust: 0, brake: 0, airL: 0, airR: 0 };
 		let pause = false;
+		let fire = false;
 
 		// Keyboard
 		s.steer += this.key('ArrowRight', 'KeyD') - this.key('ArrowLeft', 'KeyA');
@@ -44,6 +47,7 @@ export class Input {
 		s.airL = Math.max(s.airL, this.key('KeyQ', 'ShiftLeft'));
 		s.airR = Math.max(s.airR, this.key('KeyE', 'ShiftRight'));
 		pause ||= !!this.key('Escape', 'KeyP');
+		fire ||= !!this.key('KeyF', 'Enter', 'ControlLeft', 'ControlRight');
 
 		// Standard gamepads (desktop)
 		if (navigator.getGamepads) {
@@ -55,6 +59,7 @@ export class Input {
 				s.airL = Math.max(s.airL, gp.buttons[4]?.value || 0);
 				s.airR = Math.max(s.airR, gp.buttons[5]?.value || 0);
 				pause ||= !!gp.buttons[9]?.pressed;
+				fire ||= !!(gp.buttons[2]?.pressed || gp.buttons[1]?.pressed);
 			}
 		}
 
@@ -77,6 +82,7 @@ export class Input {
 				}
 				s.steer += stickX;
 				pause ||= !!gp.buttons[5]?.pressed; // B (right) or Y (left)
+				fire ||= !!gp.buttons[4]?.pressed; // A (right) or X (left)
 			}
 		}
 
@@ -84,6 +90,8 @@ export class Input {
 		this.state = s;
 		this.pausePressed = pause && !this._pauseHeld;
 		this._pauseHeld = pause;
+		this.firePressed = fire && !this._fireHeld;
+		this._fireHeld = fire;
 		return s;
 	}
 }

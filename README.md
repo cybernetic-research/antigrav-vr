@@ -32,6 +32,7 @@ Play seated. To recenter, hold the Meta button.
 | Brake | Left trigger | S / Down | LT |
 | Steer | Thumbstick | A D / Left Right | Left stick |
 | Airbrakes | Left / right grip | Q / E | LB / RB |
+| Fire weapon | A or X | F / Enter / Ctrl | X or B |
 | Pause | B or Y | Esc / P | Start |
 
 In VR you point at menus with the controller rays and pull the trigger to select. On the desktop you click them.
@@ -47,8 +48,21 @@ In VR you point at menus with the controller rays and pull the trigger to select
   - **Aurora Ring:** flowing night circuit.
   - **Kessler Canyon:** elevation changes through red mesas.
   - **Halcyon Skyway:** a figure-eight among skyscrapers that crosses over itself.
-- **Cockpit view:** canopy frame, dashboard HUD (speed, lap, position, lap and best times), and a yoke that follows your steering.
-- **Hover physics:** drift, airbrakes, boost pads, wall bounces and ship-to-ship contact.
+- **Cockpit view:** three screens sit low in your peripheral vision, so the road ahead stays clear:
+  - left: speed, shield and the weapon you're holding
+  - right: lap, position and times
+  - centre, on the dash: a live track map and a radar of the nearest ships
+- **Weapons:** drive over the target tiles to pick up a random weapon:
+  - rocket salvo
+  - homing missile
+  - mines dropped behind you
+  - autopilot, which flies the ship for a few seconds
+
+  Hits drain your shield, which recharges slowly. A ship at zero shield is eliminated. AI pilots use weapons too.
+- **Announcer voice:** calls the countdown, pickups, autopilot, eliminations ("opponent destroyed",
+  "contender eliminated"), missile warnings, shield warnings and laps.
+- **Hover physics:** drift, airbrakes, wall bounces and ship-to-ship contact. Boost pads are placed by hand
+  and also automatically along every long straight.
 - **AI pilots:** each takes a racing line, brakes for corners and avoids the ship ahead and alongside, with mild rubber-banding.
 - **Race flow:** start lights, lap callouts, wrong-way warning, results and pause menu.
 - **Sound:** synthesized engine, wind, scrape and boost effects, plus a panned engine sound for the nearest rival.
@@ -95,7 +109,9 @@ splits.
 | `src/shipModel.js` | Teams, procedural ships, cockpit interior |
 | `src/hud.js`, `src/ui.js` | Canvas-texture HUD, panels, and laser pointer / mouse picking |
 | `src/input.js` | Keyboard, gamepad and XR controller mapping |
-| `src/audio.js`, `src/synthMusic.js` | Sound effects, music playback, generative soundtrack |
+| `src/weapons.js` | Weapon pickups, projectiles, damage, elimination and AI weapon use |
+| `src/audio.js`, `src/synthMusic.js` | Sound effects, announcer, music playback, generative soundtrack |
+| `assets/voice/` | Announcer clips, generated with `tools/make-voice.sh` (eSpeak NG + ffmpeg) |
 | `src/psx.js` | Optional loader for track data from your own disc |
 | `tools/serve.mjs` | Static server (http, or https with an auto-generated certificate) |
 | `tools/sim.mjs`, `tools/check-tracks.mjs` | Headless AI race and layout checks (`npm install` first) |
