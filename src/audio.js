@@ -227,6 +227,10 @@ export class Audio {
 		}
 	}
 
+	loadingProgress(f) {
+		this.loadingTheme?.setProgress(f);
+	}
+
 	stopMusic() {
 		const m = this.music;
 		m.wanted = false;

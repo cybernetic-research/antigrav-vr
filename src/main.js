@@ -459,7 +459,10 @@ async function startRace() {
 	if (state === 'loading') return;
 	const entry = trackList[settings.track] || trackList[0];
 	showLoading(entry.name.toUpperCase());
-	const progress = (f, detail) => loading.set(f, detail);
+	const progress = (f, detail) => {
+		loading.set(f, detail);
+		audio.loadingProgress(f);
+	};
 	try {
 		// Let the loading screen render before the build work
 		await new Promise((r) => setTimeout(r, 60));
@@ -655,8 +658,7 @@ function disposeRace() {
 
 // --- Race loop --------------------------------------------------------------------------------
 
-function standings() {
-	const r = race;
+function standings(r = race) {
 	const done = r.finishOrder;
 	const rest = r.crafts.filter((c) => !c.finished).sort((a, b) => a.eliminated - b.eliminated || b.progress - a.progress);
 	return done.concat(rest);
@@ -929,7 +931,8 @@ function showResults() {
 		p.background();
 		p.text('RESULTS', 512, 70, { size: 64, align: 'center', italic: true, color: COLORS.accent });
 		p.text(r.track.name, 512, 130, { size: 32, align: 'center', color: COLORS.dim });
-		const st = standings();
+		// use the captured race: this panel can redraw (hover change) after the race is gone
+		const st = standings(r);
 		let y = 200;
 		p.text('POS', 70, y, { size: 26, color: COLORS.dim });
 		p.text('PILOT', 180, y, { size: 26, color: COLORS.dim });
@@ -960,6 +963,7 @@ renderer.setAnimationLoop(() => {
 	input.update();
 
 	if (state === 'loading') {
+		loading.bpm = audio.loadingTheme?.dnb ? 172 : 134;
 		loading.update(dt, elapsed);
 	} else if (state === 'title') {
 		titleShip.rotation.y += dt * 0.4;
@@ -1052,6 +1056,7 @@ window.antigrav = {
 		},
 		progress(fraction, detail) {
 			loading.set(fraction, detail);
+			audio.loadingProgress(fraction);
 		},
 		hide() {
 			hideLoading();

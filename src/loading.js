@@ -4,6 +4,10 @@ import { CanvasPanel, COLORS, FONT_DISPLAY, FONT } from './ui.js';
 // Late-90s style loading screen: a twisting tunnel of neon wireframe frames
 // rushing past, light streaks, your ship flying ahead, and a panel with a
 // chrome title, a chunky segmented progress bar, rotating tips and scanlines.
+// It changes as loading goes on (by progress, or by time on a slow step):
+//   from 50%: frames morph into hexagons/triangles and a vector grid floor and
+//             ceiling fade in;  from 80%: warp speed.
+// Frames pulse on the beat of the loading music (`bpm` is set by the game).
 
 const TIPS = [
 	'Tap an airbrake to tighten your line through fast corners',
@@ -30,11 +34,18 @@ export class LoadingScreen {
 		this.tipAt = 0;
 		this.ship = null;
 
-		// tunnel: square frames, each a little more twisted
+		// tunnel: wireframe frames, each a little more twisted
 		this.frames = [];
-		const sq = new THREE.BufferGeometry().setFromPoints([
-			new THREE.Vector3(-1, -1, 0), new THREE.Vector3(1, -1, 0), new THREE.Vector3(1, 1, 0), new THREE.Vector3(-1, 1, 0), new THREE.Vector3(-1, -1, 0)
-		]);
+		const polygon = (n, rot = 0) => {
+			const pts = [];
+			for (let k = 0; k <= n; k++) {
+				const a = rot + (k / n) * Math.PI * 2;
+				pts.push(new THREE.Vector3(Math.cos(a) * 1.3, Math.sin(a) * 1.3, 0));
+			}
+			return new THREE.BufferGeometry().setFromPoints(pts);
+		};
+		this.shapes = { square: polygon(4, Math.PI / 4), hex: polygon(6), tri: polygon(3, Math.PI / 2) };
+		const sq = this.shapes.square;
 		for (let i = 0; i < 36; i++) {
 			const line = new THREE.Line(sq, new THREE.LineBasicMaterial({ color: FRAME_COLORS[i % FRAME_COLORS.length], transparent: true, fog: true }));
 			line.scale.setScalar(5.5);
@@ -61,6 +72,21 @@ export class LoadingScreen {
 		glow.rotation.x = -Math.PI / 2;
 		glow.position.set(0, -2.6, -60);
 		this.group.add(glow);
+
+		// vector grid floor and ceiling (fade in from 50%)
+		const grid = [];
+		for (let x = -10; x <= 10; x += 2) grid.push(x, 0, 4, x, 0, -140);
+		for (let z = 4; z >= -140; z -= 4) grid.push(-10, 0, z, 10, 0, z);
+		const gridGeo = new THREE.BufferGeometry();
+		gridGeo.setAttribute('position', new THREE.Float32BufferAttribute(grid, 3));
+		this.grids = [-3.2, 3.6].map((y, i) => {
+			const g = new THREE.LineSegments(gridGeo, new THREE.LineBasicMaterial({ color: i ? 0xff2bd6 : 0x2ad1ff, transparent: true, opacity: 0 }));
+			g.position.y = y;
+			this.group.add(g);
+			return g;
+		});
+		this.gridScroll = 0;
+		this.bpm = 134;
 
 		this.shipMount = new THREE.Group();
 		this.shipMount.position.set(0, -1.9, -8);
@@ -89,6 +115,10 @@ export class LoadingScreen {
 
 	reset(title = 'LOADING') {
 		this.title = title;
+		this.startedAt = null;
+		this.morphed = false;
+		for (const f of this.frames) f.geometry = this.shapes.square;
+		for (const g of this.grids) g.material.opacity = 0;
 		this.detail = '';
 		this.progress = 0;
 		this.shown = 0;
@@ -97,27 +127,52 @@ export class LoadingScreen {
 	}
 
 	update(dt, now) {
-		const speed = 38;
+		this.startedAt ??= now;
+		const age = now - this.startedAt;
+		// stage 0..2 from progress, or from time if a step is slow
+		const stage = this.shown > 0.8 || age > 90 ? 2 : this.shown > 0.5 || age > 45 ? 1 : 0;
+		if (stage >= 1 && !this.morphed) {
+			this.morphed = true;
+			this.frames.forEach((f, i) => (f.geometry = i % 2 ? this.shapes.tri : this.shapes.hex));
+		}
+		const warp = stage === 2 ? 2.4 : 1;
+		this.warpEase = (this.warpEase ?? 1) + (warp - (this.warpEase ?? 1)) * Math.min(1, dt * 1.5);
+		const speed = 38 * this.warpEase;
+		const twist = stage >= 1 ? 0.06 : 0.02;
+		const spin = stage >= 1 ? 0.6 : 0.25;
+		// pulse on the beat of the loading music
+		const beat = (age * this.bpm) / 60;
+		const pulse = 1 + 0.12 * Math.exp(-(beat % 1) * 7);
 		for (const [i, f] of this.frames.entries()) {
 			f.position.z += speed * dt;
 			if (f.position.z > 4) f.position.z -= this.frames.length * 4;
-			f.rotation.z = f.position.z * 0.02 + now * 0.25 + i * 0.0;
+			f.rotation.z = f.position.z * twist + now * spin * (i % 2 ? -1 : 1) * (stage >= 1 ? 1 : 0) + now * 0.25;
+			f.scale.setScalar(4.3 * pulse * (stage === 2 ? 1 + 0.15 * Math.sin(f.position.z * 0.08 + now * 3) : 1));
 			f.material.opacity = THREE.MathUtils.clamp(1 - -f.position.z / 140, 0, 1);
+			if (stage === 2) f.material.color.setHSL((now * 0.2 + i * 0.03) % 1, 1, 0.6);
+		}
+		const gridTarget = stage >= 1 ? 0.55 : 0;
+		this.gridScroll = (this.gridScroll + speed * dt) % 4;
+		for (const g of this.grids) {
+			g.material.opacity += (gridTarget - g.material.opacity) * Math.min(1, dt * 1.2);
+			g.position.z = this.gridScroll;
 		}
 		const p = this.streaks.geometry.attributes.position;
 		for (let i = 0; i < p.count; i += 2) {
 			const len = p.getZ(i) - p.getZ(i + 1);
-			let z = p.getZ(i) + speed * 1.8 * dt;
+			let z = p.getZ(i) + speed * (stage === 2 ? 3 : 1.8) * dt;
 			if (z > 4) z -= 144;
 			p.setZ(i, z);
 			p.setZ(i + 1, z - len);
 		}
 		p.needsUpdate = true;
 		if (this.ship) {
+			const weave = stage === 2 ? 1.8 : stage === 1 ? 1.1 : 0.6;
 			this.ship.position.y = Math.sin(now * 2.1) * 0.12;
-			this.ship.rotation.z = Math.sin(now * 0.9) * 0.18;
-			this.ship.position.x = Math.sin(now * 0.7) * 0.6;
-			for (const g of this.ship.userData.glows || []) g.scale.setScalar(g.userData.baseScale * (1.3 + Math.random() * 0.3));
+			this.ship.position.x = Math.sin(now * 0.7 * (stage === 2 ? 1.8 : 1)) * weave;
+			this.ship.rotation.z = -Math.cos(now * 0.7 * (stage === 2 ? 1.8 : 1)) * 0.25 * weave;
+			const flare = stage === 2 ? 2.1 : 1.3;
+			for (const g of this.ship.userData.glows || []) g.scale.setScalar(g.userData.baseScale * (flare + Math.random() * 0.4));
 		}
 		// ease the shown bar towards the real progress; redraw ~20 fps
 		this.shown += (this.progress - this.shown) * Math.min(1, dt * 6);

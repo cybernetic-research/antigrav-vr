@@ -1,10 +1,22 @@
 // Loading-screen theme: an original late-90s style big-beat / acid breakbeat,
 // synthesized live. Syncopated break, a squelchy 303-style acid line with
 // accents and slides, rave chord stabs and a pad wash. It starts as an
-// ambient intro and builds into the full break, so a long wait has a payoff.
+// ambient intro and builds into the full break; once loading passes ~70% (or
+// after 90 s) it switches up into drum & bass at 172 BPM with a rolling reese
+// bassline, so a long wait keeps building.
 
 const BPM = 134;
-const STEP = 60 / BPM / 4;
+const DNB_BPM = 172;
+let STEP = 60 / BPM / 4;
+// Drum & bass bar: two-step kick/snare, ghost notes, 16th hats
+const DNB = {
+	kick: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+	kickAlt: [1, 0, 0, 0, 0, 0, 0, 0.8, 0, 0, 1, 0, 0, 0, 0, 0],
+	snare: [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+	ghost: [0, 0, 0, 0, 0, 0, 0, 0.3, 0, 0.22, 0, 0, 0, 0, 0, 0.3],
+	hat: [0.9, 0.3, 0.6, 0.3, 0.9, 0.3, 0.6, 0.4, 0.9, 0.3, 0.6, 0.3, 0.9, 0.3, 0.6, 0.5]
+};
+const REESE = [0, 0, 8, 7]; // semitones, two bars each
 const ROOT = 45; // A2
 const MINOR_PENT = [0, 3, 5, 7, 10, 12, 15];
 
@@ -48,8 +60,17 @@ export class LoadingMusic {
 		return !!this.timer;
 	}
 
+	// Loading progress 0..1: past ~70% the theme switches up into drum & bass
+	setProgress(f) {
+		if (f >= 0.7) this.wantDnb = true;
+	}
+
 	start() {
 		if (this.timer) return;
+		STEP = 60 / BPM / 4;
+		this.dnb = false;
+		this.wantDnb = false;
+		this.startedAt = this.ctx.currentTime;
 		const t = this.ctx.currentTime;
 		this.bus.gain.cancelScheduledValues(t);
 		this.bus.gain.setValueAtTime(0, t);
@@ -68,9 +89,34 @@ export class LoadingMusic {
 		this.bus.gain.cancelScheduledValues(t);
 		this.bus.gain.setValueAtTime(this.bus.gain.value, t);
 		this.bus.gain.linearRampToValueAtTime(0, t + fade);
-		const osc = this.acidOsc;
-		setTimeout(() => osc?.stop(), (fade + 0.1) * 1000);
+		const oscs = [this.acidOsc, ...(this.reese?.oscs || [])];
+		setTimeout(() => oscs.forEach((o) => o?.stop()), (fade + 0.1) * 1000);
 		this.acidOsc = null;
+		this.reese = null;
+	}
+
+	// Reese bass: detuned saws plus a sub, through a slowly moving lowpass
+	_reeseVoice() {
+		const ctx = this.ctx;
+		const filter = ctx.createBiquadFilter();
+		filter.type = 'lowpass';
+		filter.Q.value = 3;
+		filter.frequency.value = 400;
+		const amp = ctx.createGain();
+		amp.gain.value = 0;
+		filter.connect(amp).connect(this.bus);
+		const oscs = [];
+		for (const [type, detune, level] of [['sawtooth', -14, 0.5], ['sawtooth', 14, 0.5], ['sine', 0, 0.9]]) {
+			const o = ctx.createOscillator();
+			o.type = type;
+			o.detune.value = detune;
+			const g = ctx.createGain();
+			g.gain.value = level;
+			o.connect(g).connect(filter);
+			o.start();
+			oscs.push(o);
+		}
+		this.reese = { oscs, filter, amp };
 	}
 
 	_acidVoice() {
@@ -108,6 +154,20 @@ export class LoadingMusic {
 	_play(step, t) {
 		const s = step % 16;
 		const bar = Math.floor(step / 16);
+		// switch up at the next bar line once loading is far enough along
+		if (s === 0 && !this.dnb && (this.wantDnb || t - this.startedAt > 90)) {
+			this.dnb = true;
+			this.dnbBar = bar;
+			STEP = 60 / DNB_BPM / 4;
+			this._reeseVoice();
+			this._riser(t, 0.6);
+			this._kick(t, 1);
+			this._snare(t, 1);
+		}
+		if (this.dnb) {
+			this._playDnb(s, bar - this.dnbBar, t);
+			return;
+		}
 		const sec = SECTIONS[Math.floor(bar / 8) % SECTIONS.length];
 		const barInSec = bar % 8;
 
@@ -127,6 +187,31 @@ export class LoadingMusic {
 		if (sec.stabs && (s === 6 || s === 14) && bar % 2 === 1) this._stab(t);
 		if (sec.pad && s === 0 && bar % 4 === 0) this._pad(t);
 		if (sec.riser && barInSec === 4 && s === 0) this._riser(t, STEP * 64);
+	}
+
+	_playDnb(s, bar, t) {
+		const fill = bar % 8 === 7 && s >= 12;
+		const kick = bar % 4 === 3 ? DNB.kickAlt : DNB.kick;
+		if (kick[s]) this._kick(t, kick[s]);
+		if (fill) this._snare(t, 0.4 + (s - 12) * 0.15);
+		else {
+			if (DNB.snare[s]) this._snare(t, 1);
+			if (DNB.ghost[s]) this._snare(t, DNB.ghost[s]);
+		}
+		this._hat(t, DNB.hat[s] * (0.7 + Math.random() * 0.3), s % 4 === 2 && bar % 2 ? 0.12 : 0.03);
+		// rolling reese: a new note every two bars, filter breathing over 8 bars
+		const r = this.reese;
+		if (r && s === 0) {
+			const semis = REESE[Math.floor(bar / 2) % REESE.length];
+			const f = this._freq(semis - 12);
+			for (const o of r.oscs) o.frequency.setTargetAtTime(f, t, 0.02);
+			r.amp.gain.setTargetAtTime(0.32, t, 0.05);
+			r.filter.frequency.setTargetAtTime(260 + 520 * (0.5 - 0.5 * Math.cos((bar % 8) / 8 * Math.PI * 2)), t, 0.4);
+		}
+		// acid and stabs carry on over the top, a little quieter
+		this._acid(t, s, bar, 0.55);
+		if ((s === 3 || s === 11) && bar % 4 === 2) this._stab(t);
+		if (s === 0 && bar % 8 === 0) this._pad(t);
 	}
 
 	_env(g, t, a, peak, d) {
