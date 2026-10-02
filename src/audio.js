@@ -5,6 +5,7 @@
 // through an <audio> element.
 
 import { SynthMusic } from './synthMusic.js';
+import { LoadingMusic } from './loadingMusic.js';
 
 export class Audio {
 	constructor() {
@@ -35,6 +36,8 @@ export class Audio {
 		this.musicGain.connect(ctx.destination);
 		if (this.music.el) ctx.createMediaElementSource(this.music.el).connect(this.musicGain);
 		this.synth = new SynthMusic(ctx, this.musicGain, this.noiseBuf);
+		this.loadingTheme = new LoadingMusic(ctx, this.musicGain, this.noiseBuf);
+		if (this.loadingWanted) this.loadingMusic(true);
 		this.voiceGain = ctx.createGain();
 		this.voiceGain.gain.value = 1.0;
 		this.voiceGain.connect(ctx.destination);
@@ -209,6 +212,19 @@ export class Audio {
 		this.synth.stop();
 		if (!restart && m.index >= 0 && !m.el.paused && (mode === 'shuffle' || mode === m.index)) return;
 		this._load(mode === 'shuffle' ? this._randomIndex() : mode);
+	}
+
+	// The loading-screen theme takes over from whatever music was playing
+	loadingMusic(on) {
+		this.loadingWanted = on;
+		if (!this.ctx) return; // starts on unlock()
+		if (on) {
+			if (this.music.el) this.music.el.pause();
+			this.synth?.stop();
+			this.loadingTheme.start();
+		} else {
+			this.loadingTheme.stop();
+		}
 	}
 
 	stopMusic() {

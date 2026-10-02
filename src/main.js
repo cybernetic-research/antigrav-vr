@@ -11,6 +11,7 @@ import { Audio } from './audio.js';
 import { CanvasPanel, Pointers, COLORS, FONT_DISPLAY } from './ui.js';
 import { CockpitHUD, Banner, formatTime } from './hud.js';
 import { WeaponSystem, aiUseWeapon } from './weapons.js';
+import { LoadingScreen } from './loading.js';
 
 // Working title. Deliberately not the name of the game that inspired it.
 const TITLE = 'ANTIGRAV';
@@ -341,6 +342,7 @@ let elapsed = 0;
 function showTitle() {
 	state = 'title';
 	disposeRace();
+	scene.remove(loading.group);
 	scene.add(titleGroup);
 	scene.fog = null;
 	scene.background = new THREE.Color(0x02040f);
@@ -359,6 +361,38 @@ function musicLabel() {
 	if (settings.music === 'synth' || !musicList.length) return 'Built-in synth';
 	if (settings.music === 'shuffle') return 'Shuffle my songs';
 	return musicList[settings.music]?.title || 'Shuffle my songs';
+}
+
+// --- Loading screen -------------------------------------------------------------------------
+
+const loading = new LoadingScreen();
+
+function showLoading(title) {
+	disposeRace();
+	scene.remove(titleGroup);
+	scene.add(loading.group, rig);
+	scene.fog = new THREE.FogExp2(0x02040f, 0.012);
+	scene.background = new THREE.Color(0x02040f);
+	rig.position.set(0, 0, 0);
+	rig.quaternion.identity();
+	camera.rotation.set(0, 0, 0);
+	pointers.setPanels([]);
+	loading.reset(title);
+	const team = TEAMS[settings.team] || TEAMS[0];
+	const ship = buildShip(team);
+	ship.userData.shared = !!team.buildModel;
+	loading.setShip(ship);
+	state = 'loading';
+	audio.setRacing(false);
+	if (settings.music !== 'off') audio.loadingMusic(true);
+}
+
+function hideLoading() {
+	scene.remove(loading.group);
+	const ship = loading.ship;
+	loading.setShip(null);
+	if (ship && !ship.userData.shared) disposeObject(ship);
+	audio.loadingMusic(false);
 }
 
 function cycle(id, dir) {
@@ -424,27 +458,29 @@ let trackCache = null;
 async function startRace() {
 	if (state === 'loading') return;
 	const entry = trackList[settings.track] || trackList[0];
-	// Leave the old race first so the "LOADING" menu is visible, also in VR
-	if (race) showTitle();
-	state = 'loading';
-	loadingMessage = 'LOADING...';
-	menuPanel.redraw();
+	showLoading(entry.name.toUpperCase());
+	const progress = (f, detail) => loading.set(f, detail);
 	try {
-		// Let the "loading" frame render before the (synchronous) build work
-		await new Promise((r) => setTimeout(r, 50));
+		// Let the loading screen render before the build work
+		await new Promise((r) => setTimeout(r, 60));
 		let track;
 		if (trackCache && trackCache.entry === entry) {
 			track = trackCache.track;
 		} else {
 			if (trackCache) disposeObject(trackCache.track.group, trackCache.track.sky);
 			trackCache = null;
-			track = entry.kind === 'psx' ? await loadPsxTrack(entry.def) : entry.kind === 'mod' ? await entry.load() : buildBuiltinTrack(entry.def);
+			progress(0.1, 'Building circuit');
+			await new Promise((r) => setTimeout(r, 30));
+			track =
+				entry.kind === 'psx' ? await loadPsxTrack(entry.def, undefined, progress) : entry.kind === 'mod' ? await entry.load(progress) : buildBuiltinTrack(entry.def);
 			trackCache = { entry, track };
 		}
-		scene.remove(titleGroup);
+		progress(1, 'Ready');
+		hideLoading();
 		setupRace(track);
 	} catch (e) {
 		console.error(e);
+		hideLoading();
 		showTitle();
 		loadingMessage = 'LOAD FAILED';
 		menuPanel.redraw();
@@ -923,7 +959,9 @@ renderer.setAnimationLoop(() => {
 	elapsed += dt;
 	input.update();
 
-	if (state === 'title' || state === 'loading') {
+	if (state === 'loading') {
+		loading.update(dt, elapsed);
+	} else if (state === 'title') {
 		titleShip.rotation.y += dt * 0.4;
 		titleShip.position.y = -0.78 + Math.sin(elapsed * 1.5) * 0.04;
 	} else if (race) {
@@ -1006,7 +1044,21 @@ window.antigrav = {
 		menuPanel.redraw();
 	},
 	// the title scene, for add-ons that want to show their own panels there
-	titleGroup
+	titleGroup,
+	// the loading screen (with its music) for add-ons' own long jobs
+	loading: {
+		show(title) {
+			showLoading(title);
+		},
+		progress(fraction, detail) {
+			loading.set(fraction, detail);
+		},
+		hide() {
+			hideLoading();
+			showTitle();
+			if (audio.music.wanted) audio.playMusic(settings.music, false);
+		}
+	}
 };
 window.dispatchEvent(new Event('antigrav-ready'));
 

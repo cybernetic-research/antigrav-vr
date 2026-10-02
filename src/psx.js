@@ -72,8 +72,11 @@ async function fetchBin(url) {
 
 // read(path) -> Promise<ArrayBuffer>; defaults to fetching from the server.
 // Add-ons pass a reader backed by a disc image the player picked.
-export async function loadPsxTrack(def, read = fetchBin) {
+// onProgress(fraction, detail) reports stages; the awaits let a loading screen animate
+export async function loadPsxTrack(def, read = fetchBin, onProgress = () => {}) {
 	const p = def.path;
+	const breathe = () => new Promise((r) => setTimeout(r, 0));
+	onProgress(0.05, 'Reading circuit data');
 	const [sceneCmp, scenePrm, skyCmp, skyPrm, libCmp, libTtf, trv, trf, trs, tex] = await Promise.all([
 		read(`${p}/SCENE.CMP`),
 		read(`${p}/SCENE.PRM`),
@@ -87,6 +90,8 @@ export async function loadPsxTrack(def, read = fetchBin) {
 		def.tex ? read(`${p}/TRACK.TEX`) : Promise.resolve(null)
 	]);
 
+	onProgress(0.2, 'Building the racing line');
+	await breathe();
 	// Track geometry and racing line (in raw PSX units, converted axes)
 	const vertices = readTrackVertices(trv);
 	const faces = readTrackFaces(trf);
@@ -102,8 +107,14 @@ export async function loadPsxTrack(def, read = fetchBin) {
 	world.scale.setScalar(k);
 	group.add(world);
 
+	onProgress(0.3, 'Decoding track textures');
+	await breathe();
 	world.add(buildTrackMesh(vertices, faces, libCmp, libTtf));
+	onProgress(0.55, 'Building scenery');
+	await breathe();
 	for (const m of buildPrmScene(scenePrm, sceneCmp)) world.add(m);
+	onProgress(0.8, 'Painting the sky');
+	await breathe();
 
 	const sky = new THREE.Group();
 	const skyInner = new THREE.Group();
@@ -122,6 +133,7 @@ export async function loadPsxTrack(def, read = fetchBin) {
 		kappaSmooth: 10
 	});
 	addBoosts(path, faces, vertices, k);
+	onProgress(1, 'Ready');
 
 	return {
 		name: def.name,
