@@ -448,8 +448,8 @@ export function buildCockpit(livery = TEAMS[0].liveries[0]) {
 		return m;
 	};
 	const hudMounts = {
-		left: mount(-0.46, rimY + 0.02, -0.36, 0.7, -0.5),
-		right: mount(0.46, rimY + 0.02, -0.36, -0.7, -0.5),
+		left: mount(-0.33, rimY + 0.1, -0.43, 0.45, -0.6),
+		right: mount(0.33, rimY + 0.1, -0.43, -0.45, -0.6),
 		center: mount(0, rimY + 0.04, -0.47, 0, -0.95)
 	};
 	// bezels behind the screens

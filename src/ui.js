@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 
-export const FONT = '"Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif';
+// Techno faces (SIL Open Font License, loaded from Google Fonts in index.html)
+// with system fallbacks if they can't load.
+export const FONT = '"Exo 2", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif';
+export const FONT_DISPLAY = '"Orbitron", "Exo 2", "Segoe UI", Helvetica, Arial, sans-serif';
 export const COLORS = {
 	text: '#e8f1ff',
 	dim: '#8aa0bf',
@@ -73,13 +76,16 @@ export class CanvasPanel {
 		ctx.stroke();
 	}
 
-	text(str, x, y, { size = 40, color = COLORS.text, align = 'left', weight = 'bold', italic = false, baseline = 'middle' } = {}) {
+	// Big text uses the display face, small text the body face; maxWidth squeezes to fit
+	text(str, x, y, { size = 40, color = COLORS.text, align = 'left', weight = 'bold', italic = false, baseline = 'middle', maxWidth, display } = {}) {
 		const { ctx } = this;
-		ctx.font = `${italic ? 'italic ' : ''}${weight} ${size}px ${FONT}`;
+		const face = display ?? size >= 30 ? FONT_DISPLAY : FONT;
+		ctx.font = `${italic ? 'italic ' : ''}${weight} ${size}px ${face}`;
 		ctx.fillStyle = color;
 		ctx.textAlign = align;
 		ctx.textBaseline = baseline;
-		ctx.fillText(str, x, y);
+		if (maxWidth) ctx.fillText(str, x, y, maxWidth);
+		else ctx.fillText(str, x, y);
 	}
 
 	button(id, x, y, w, h, label, { size = 40, primary = false } = {}) {

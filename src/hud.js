@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CanvasPanel, COLORS, FONT, roundRect } from './ui.js';
+import { CanvasPanel, COLORS, FONT_DISPLAY as FONT, roundRect } from './ui.js';
 
 export function formatTime(t) {
 	if (!isFinite(t) || t <= 0) return '--:--.--';

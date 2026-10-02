@@ -257,7 +257,9 @@ function roll() {
 export function aiUseWeapon(craft, crafts, weapons, now) {
 	const w = craft.weapon;
 	if (!w || craft.eliminated || now < 8) return; // no weapons in the opening scramble
-	if (!craft.aiFireAt) craft.aiFireAt = now + 0.5 + Math.random() * 2;
+	// fireWill (0..1, from the AI aggression setting): low = hesitant, sometimes never fires
+	const will = craft.fireWill ?? 0.6;
+	if (!craft.aiFireAt) craft.aiFireAt = now + (0.5 + Math.random() * 2) / Math.max(0.2, will) + (Math.random() > will ? 6 : 0);
 	if (now < craft.aiFireAt) return;
 	const L = craft.track.length;
 	let ahead = null;

@@ -8,7 +8,7 @@ import { AIPilot } from './ai.js';
 import { buildShip, buildCockpit, TEAMS, shipClass, EYE_IN_SHIP } from './shipModel.js';
 import { Input } from './input.js';
 import { Audio } from './audio.js';
-import { CanvasPanel, Pointers, COLORS } from './ui.js';
+import { CanvasPanel, Pointers, COLORS, FONT_DISPLAY } from './ui.js';
 import { CockpitHUD, Banner, formatTime } from './hud.js';
 import { WeaponSystem, aiUseWeapon } from './weapons.js';
 
@@ -17,6 +17,13 @@ const TITLE = 'ANTIGRAV';
 const SUBTITLE = 'VR ANTI-GRAVITY LEAGUE';
 const AI_NAMES = ['K. Voss', 'M. Sato', 'J. Reyes', 'T. Halvard', 'A. Petrov', 'D. Okoro', 'L. Marchetti'];
 const PHYS_DT = 1 / 120;
+// AI aggression levels: top-speed range, how readily they fire, cornering commitment
+const AI_LEVELS = [
+	{ name: 'Rookie', skill: [0.86, 0.93], fire: 0.25, corner: 0.92 },
+	{ name: 'Racer', skill: [0.92, 0.99], fire: 0.55, corner: 0.97 },
+	{ name: 'Elite', skill: [0.97, 1.03], fire: 0.8, corner: 1.0 },
+	{ name: 'Brutal', skill: [1.0, 1.07], fire: 1.0, corner: 1.04 }
+];
 const MAX_DT = Number(new URLSearchParams(location.search).get('maxdt')) || 0.05;
 
 const params = new URLSearchParams(location.search);
@@ -100,7 +107,7 @@ pointers.attachTo(rig);
 
 const settings = loadSettings();
 function loadSettings() {
-	const d = { track: 0, team: 0, cls: 'sport', laps: 3, opponents: 7, horizonLock: false, music: 'shuffle' };
+	const d = { track: 0, team: 0, cls: 'sport', laps: 3, opponents: 7, ai: 1, horizonLock: false, music: 'shuffle' };
 	try {
 		const s = { ...d, ...JSON.parse(localStorage.getItem('antigrav-settings') || '{}') };
 		if (!CLASSES[s.cls]) s.cls = d.cls;
@@ -177,18 +184,18 @@ function updateTitleShip() {
 		});
 	}
 	titleShip = buildShip(TEAMS[settings.team] || TEAMS[0]);
-	titleShip.scale.setScalar(0.42);
-	titleShip.position.set(0, -0.95, -4.4);
+	titleShip.scale.setScalar(0.4);
+	titleShip.position.set(0, -0.78, -3.7);
 	titleShip.rotation.y = rot;
 	titleGroup.add(titleShip);
 }
 updateTitleShip();
 const podium = new THREE.Mesh(new THREE.CylinderGeometry(1.9, 2.1, 0.25, 32), new THREE.MeshLambertMaterial({ color: 0x1a2236 }));
-podium.position.set(0, -1.25, -4.4);
+podium.position.set(0, -1.08, -3.7);
 titleGroup.add(podium);
 const podiumRing = new THREE.Mesh(new THREE.TorusGeometry(2.0, 0.03, 6, 48), new THREE.MeshBasicMaterial({ color: 0x2ad1ff }));
 podiumRing.rotation.x = Math.PI / 2;
-podiumRing.position.set(0, -1.12, -4.4);
+podiumRing.position.set(0, -0.95, -3.7);
 titleGroup.add(podiumRing);
 
 const logoPanel = new CanvasPanel(1024, 300, 2.6);
@@ -200,7 +207,7 @@ logoPanel.setDraw((ctx, p) => {
 	g.addColorStop(0, '#ffffff');
 	g.addColorStop(0.5, '#2ad1ff');
 	g.addColorStop(1, '#1f4fd8');
-	ctx.font = `italic 900 190px ${'"Segoe UI", Helvetica, Arial, sans-serif'}`;
+	ctx.font = `900 170px ${FONT_DISPLAY}`;
 	ctx.textAlign = 'center';
 	ctx.textBaseline = 'middle';
 	ctx.lineWidth = 12;
@@ -213,7 +220,7 @@ logoPanel.setDraw((ctx, p) => {
 	p.text(SUBTITLE, 512, 272, { size: 38, align: 'center', color: COLORS.accent2, italic: true });
 });
 
-const menuPanel = new CanvasPanel(1024, 1180, 1.2);
+const menuPanel = new CanvasPanel(1024, 1300, 1.2);
 menuPanel.mesh.position.set(1.22, -0.22, -1.85);
 menuPanel.mesh.rotation.y = -0.5;
 titleGroup.add(menuPanel.mesh);
@@ -230,18 +237,43 @@ menuPanel.setDraw((ctx, p) => {
 		['CLASS', CLASSES[settings.cls].name, 'cls'],
 		['LAPS', String(settings.laps), 'laps'],
 		['RIVALS', String(settings.opponents), 'opp'],
+		['AI', null, 'ai'],
 		['VIEW', settings.horizonLock ? 'Horizon locked' : 'Cockpit locked', 'view']
 	];
 	rows.push(['MUSIC', musicLabel(), 'music']);
 	let y = 150;
 	for (const [label, value, id] of rows) {
-		p.text(label, 60, y + 45, { size: 34, color: COLORS.dim });
+		p.text(label, 60, y + 45, { size: 32, color: COLORS.dim });
 		p.button(id + '-', 250, y + 10, 80, 72, '<', { size: 44 });
-		p.text(value, 622, y + 46, { size: value.length > 16 ? 34 : 42, align: 'center' });
+		if (id === 'ai') {
+			// aggression slider: segments plus the level name
+			const lvl = settings.ai ?? 1;
+			p.text(AI_LEVELS[lvl].name.toUpperCase(), 622, y + 30, { size: 30, align: 'center', color: ['#40ff80', '#2ad1ff', '#ffd21f', '#ff4040'][lvl] });
+			for (let k = 0; k < AI_LEVELS.length; k++) {
+				ctx.fillStyle = k <= lvl ? ['#40ff80', '#2ad1ff', '#ffd21f', '#ff4040'][lvl] : 'rgba(255,255,255,0.12)';
+				ctx.fillRect(400 + k * 112, y + 56, 102, 14);
+			}
+		} else {
+			p.text(value, 622, y + 46, { size: 40, align: 'center', maxWidth: 540 });
+		}
 		p.button(id + '+', 914, y + 10, 80, 72, '>', { size: 44 });
 		y += 84;
 		if (id === 'track' || id === 'team') {
-			p.text(id === 'track' ? t.blurb : team.blurb, 622, y + 6, { size: 26, align: 'center', color: COLORS.dim, weight: 'normal' });
+			p.text(id === 'track' ? t.blurb : team.blurb, 622, y + 6, { size: 24, align: 'center', color: COLORS.dim, weight: 'normal', maxWidth: 620 });
+			y += 36;
+		}
+		if (id === 'team') {
+			// handling bars relative to the field
+			const st = team.stats;
+			const bars = [['SPEED', st.speed, 0.94, 1.07], ['THRUST', st.accel, 0.9, 1.1], ['HANDLING', (st.turn + st.grip) / 2, 0.86, 1.14]];
+			bars.forEach(([name, v, lo, hi], k) => {
+				const x = 330 + k * 200;
+				p.text(name, x, y + 4, { size: 18, color: COLORS.dim, weight: 'normal' });
+				ctx.fillStyle = 'rgba(255,255,255,0.12)';
+				ctx.fillRect(x, y + 18, 170, 8);
+				ctx.fillStyle = COLORS.accent;
+				ctx.fillRect(x, y + 18, 170 * Math.max(0.08, Math.min(1, (v - lo) / (hi - lo))), 8);
+			});
 			y += 40;
 		}
 	}
@@ -294,6 +326,10 @@ helpPanel.setDraw((ctx, p) => {
 });
 
 renderer.xr.addEventListener('sessionstart', () => menuPanel.redraw());
+// Canvas text only uses web fonts once they've loaded: redraw the panels then
+document.fonts?.load(`700 40px ${FONT_DISPLAY}`).then(() => document.fonts.ready).then(() => {
+	for (const p of [logoPanel, menuPanel, helpPanel]) p.redraw();
+});
 renderer.xr.addEventListener('sessionend', () => menuPanel.redraw());
 
 // --- Race state -----------------------------------------------------------------------------
@@ -345,6 +381,9 @@ function cycle(id, dir) {
 		case 'opp':
 			settings.opponents = (settings.opponents + dir + 8) % 8;
 			break;
+		case 'ai':
+			settings.ai = Math.max(0, Math.min(AI_LEVELS.length - 1, (settings.ai ?? 1) + dir));
+			break;
 		case 'view':
 			settings.horizonLock = !settings.horizonLock;
 			break;
@@ -378,27 +417,51 @@ function onPanelClick(panel, id) {
 	}
 }
 
+// The last loaded track is kept so "race again" doesn't rebuild it (disc
+// tracks take a while to decode on a standalone headset).
+let trackCache = null;
+
 async function startRace() {
 	if (state === 'loading') return;
 	const entry = trackList[settings.track] || trackList[0];
+	// Leave the old race first so the "LOADING" menu is visible, also in VR
+	if (race) showTitle();
 	state = 'loading';
 	loadingMessage = 'LOADING...';
 	menuPanel.redraw();
-	let track;
 	try {
 		// Let the "loading" frame render before the (synchronous) build work
-		await new Promise((r) => setTimeout(r, 30));
-		track = entry.kind === 'psx' ? await loadPsxTrack(entry.def) : entry.kind === 'mod' ? await entry.load() : buildBuiltinTrack(entry.def);
+		await new Promise((r) => setTimeout(r, 50));
+		let track;
+		if (trackCache && trackCache.entry === entry) {
+			track = trackCache.track;
+		} else {
+			if (trackCache) disposeObject(trackCache.track.group, trackCache.track.sky);
+			trackCache = null;
+			track = entry.kind === 'psx' ? await loadPsxTrack(entry.def) : entry.kind === 'mod' ? await entry.load() : buildBuiltinTrack(entry.def);
+			trackCache = { entry, track };
+		}
+		scene.remove(titleGroup);
+		setupRace(track);
 	} catch (e) {
 		console.error(e);
+		showTitle();
 		loadingMessage = 'LOAD FAILED';
-		state = 'title';
 		menuPanel.redraw();
-		return;
 	}
-	disposeRace();
-	scene.remove(titleGroup);
-	setupRace(track);
+}
+
+function disposeObject(...objects) {
+	for (const root of objects) {
+		root?.traverse((o) => {
+			if (o.geometry) o.geometry.dispose();
+			const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+			for (const m of mats) {
+				if (m.map) m.map.dispose();
+				m.dispose();
+			}
+		});
+	}
 }
 
 function setupRace(track) {
@@ -422,7 +485,8 @@ function setupRace(track) {
 		const s = -14 - row * 13;
 		const x = (i % 2 ? 1 : -1) * Math.min(hw * 0.38, 5);
 		const isPlayer = i === total - 1; // start from the back, like the classics
-		const skill = isPlayer ? 1 : 0.93 + 0.07 * (i / Math.max(1, total - 2));
+		const level = AI_LEVELS[settings.ai ?? 1];
+		const skill = isPlayer ? 1 : level.skill[0] + (level.skill[1] - level.skill[0]) * (i / Math.max(1, total - 2));
 		// AI pilots are spread over the teams of the same group as the player's
 		// (built-in teams, or e.g. an add-on's teams), using each team's spare liveries
 		const pool = TEAMS.filter((t) => (t.group || 'builtin') === (playerTeam.group || 'builtin'));
@@ -435,7 +499,8 @@ function setupRace(track) {
 		craft.name = isPlayer ? 'YOU' : AI_NAMES[i % AI_NAMES.length];
 		craft.colorCss = '#' + team.liveries[liveryIndex % team.liveries.length].glow.toString(16).padStart(6, '0');
 		crafts.push(craft);
-		pilots.push(isPlayer ? null : new AIPilot(craft, { lane: ((i % 3) - 1) * 1.5, aggression: 0.95 + Math.random() * 0.1 }));
+		pilots.push(isPlayer ? null : new AIPilot(craft, { lane: ((i % 3) - 1) * 1.5, aggression: level.corner * (0.97 + Math.random() * 0.06) }));
+		craft.fireWill = isPlayer ? 1 : level.fire;
 		const mesh = buildShip(team, liveryIndex, { cockpit: isPlayer, number: i + 1 });
 		group.add(mesh);
 		meshes.push(mesh);
@@ -545,14 +610,10 @@ function disposeRace() {
 	if (!race) return;
 	scene.add(rig);
 	scene.remove(race.group);
-	race.group.traverse((o) => {
-		if (o.geometry) o.geometry.dispose();
-		const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
-		for (const m of mats) {
-			if (m.map) m.map.dispose();
-			m.dispose();
-		}
-	});
+	// the track itself stays cached for the next race
+	race.group.remove(race.track.group);
+	if (race.track.sky) race.group.remove(race.track.sky);
+	disposeObject(race.group);
 	race = null;
 }
 
@@ -864,7 +925,7 @@ renderer.setAnimationLoop(() => {
 
 	if (state === 'title' || state === 'loading') {
 		titleShip.rotation.y += dt * 0.4;
-		titleShip.position.y = -0.95 + Math.sin(elapsed * 1.5) * 0.04;
+		titleShip.position.y = -0.78 + Math.sin(elapsed * 1.5) * 0.04;
 	} else if (race) {
 		if (input.pausePressed && (state === 'race' || state === 'countdown')) pause();
 		else if (input.pausePressed && state === 'paused') resume();
@@ -925,7 +986,9 @@ window.antigrav = {
 	setStatus(text) {
 		psxStatus = text;
 		menuPanel.redraw();
-	}
+	},
+	// the title scene, for add-ons that want to show their own panels there
+	titleGroup
 };
 window.dispatchEvent(new Event('antigrav-ready'));
 
