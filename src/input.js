@@ -1,8 +1,10 @@
 // Merges keyboard, standard gamepads and WebXR controllers into one control state.
 //
-// VR (Quest Touch / any xr-standard controller):
-//   left stick (or right stick) = steer, right trigger = thrust, left trigger = brake
+// VR (Quest Touch, Valve Index, Vive wands / any xr-standard controller):
+//   left stick (or right stick, or trackpad) = steer, right trigger = thrust, left trigger = brake
 //   left/right grip = left/right airbrake, A or X = fire weapon, hold right B = pause
+//   Controllers without A/B (e.g. Vive wands): right trackpad click = fire,
+//   hold the left trackpad click = pause
 // Keyboard: arrows/WASD steer + thrust/brake, Q/E airbrakes, F/Enter/Ctrl fire, Esc/P pause
 // Gamepad: left stick steer, RT thrust, LT brake, LB/RB airbrakes, X/B fire, Start pause
 
@@ -83,14 +85,17 @@ export class Input {
 				s.steer += stickX;
 				// Pause: right B only, held briefly so a stray thumb doesn't pause the race.
 				// (The Meta/Oculus button is reserved by the system and never reaches web apps.)
-				if (src.handedness === 'right') {
-					if (gp.buttons[5]?.pressed) {
-						this._bHeldSince ??= performance.now();
-						if (performance.now() - this._bHeldSince > 350) pause = true;
-					} else {
-						this._bHeldSince = null;
-					}
+				// Controllers without face buttons pause with a long press of the left trackpad.
+				const hasFace = gp.buttons.length > 4;
+				const pauseButton = hasFace ? (src.handedness === 'right' ? gp.buttons[5] : null) : src.handedness === 'left' ? gp.buttons[2] : null;
+				const key = `_pause_${src.handedness}`;
+				if (pauseButton?.pressed) {
+					this[key] ??= performance.now();
+					if (performance.now() - this[key] > (hasFace ? 350 : 700)) pause = true;
+				} else {
+					this[key] = null;
 				}
+				if (!hasFace && src.handedness === 'right') fire ||= !!gp.buttons[2]?.pressed; // trackpad click
 				fire ||= !!gp.buttons[4]?.pressed; // A (right) or X (left)
 			}
 		}
