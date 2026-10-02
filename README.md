@@ -9,8 +9,9 @@ synth soundtrack. The only dependency is three.js, loaded from a CDN.
 
 ## Play
 
-**Hosted:** open the GitHub Pages link for this repository in the Quest Browser (or any desktop
-browser) and press **ENTER VR**.
+**Play now:** **https://cybernetic-research.github.io/antigrav-vr/**
+
+Open it in the Quest Browser (or any desktop browser) and press **ENTER VR**. Nothing to install.
 
 **Locally:**
 
