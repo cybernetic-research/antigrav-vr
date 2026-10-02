@@ -25,6 +25,9 @@ export const AUTOPILOT_TIME = 6;
 
 const _v = new THREE.Vector3();
 const _q = new THREE.Quaternion();
+const _a = new THREE.Vector3();
+const _b = new THREE.Vector3();
+const _qi = new THREE.Quaternion();
 
 export class WeaponSystem {
 	// events: {pickup(craft, w), fired(craft, w, target), hit(target, by, kind), eliminated(target, by), autopilot(craft, on)}
@@ -34,6 +37,7 @@ export class WeaponSystem {
 		this.crafts = crafts;
 		this.events = events;
 		this.projectiles = [];
+		this.rounds = []; // gatling bullets, in world space
 		this.fx = [];
 		this.frame = newFrame();
 		this._makeAssets();
@@ -131,11 +135,7 @@ export class WeaponSystem {
 			}
 			if (now >= g.nextShot) {
 				g.nextShot = now + 1 / GATLING.rate;
-				const fwd = Math.cos(craft.psi);
-				const side = -Math.sin(craft.psi);
-				const v = Math.max(craft.vf, 0) + GATLING.speed;
-				const spread = (Math.random() - 0.5) * 0.03;
-				const p = this._spawnRound(craft, v * fwd, v * (side + spread));
+				const p = this._spawnRound(craft);
 				this.events.gunShot?.(craft, p);
 			}
 		} else {
@@ -144,12 +144,56 @@ export class WeaponSystem {
 		}
 	}
 
-	_spawnRound(owner, vs, vx) {
+	// Rounds are real bullets: they leave the muzzle along the ship's nose
+	// (plus the ship's own velocity) and fly dead straight in world space.
+	_spawnRound(owner) {
+		const q = owner.quaternion;
+		const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+		// small random spread
+		dir.add(new THREE.Vector3((Math.random() - 0.5) * 0.02, (Math.random() - 0.5) * 0.01, 0).applyQuaternion(q)).normalize();
+		const pos = new THREE.Vector3(0, 0.32, -4.2).applyQuaternion(q).add(owner.position);
+		const vel = dir.multiplyScalar(GATLING.speed + Math.max(owner.vf, 0));
 		const mesh = new THREE.Mesh(this.roundGeo, this.roundMat);
+		mesh.position.copy(pos);
+		mesh.lookAt(_v.copy(pos).add(vel));
 		this.group.add(mesh);
-		const p = { kind: 'round', owner, s: this.path.wrap(owner.s + 5), x: owner.x, vs, vx, h: 0.7, life: GATLING.range / GATLING.speed, age: 0, mesh, color: '#ffe08a' };
-		this.projectiles.push(p);
+		const p = { kind: 'round', owner, pos, vel, life: GATLING.range / GATLING.speed, age: 0, mesh };
+		this.rounds.push(p);
 		return p;
+	}
+
+	_stepRounds(dt, now) {
+		for (let i = this.rounds.length - 1; i >= 0; i--) {
+			const p = this.rounds[i];
+			p.age += dt;
+			const prev = _a.copy(p.pos);
+			p.pos.addScaledVector(p.vel, dt);
+			let dead = p.age > p.life;
+			if (!dead) {
+				for (const c of this.crafts) {
+					if (c === p.owner || c.eliminated) continue;
+					// test the segment travelled this step against the ship's hull box
+					if (c.position.distanceToSquared(p.pos) > 400) continue;
+					let hit = false;
+					for (const t of [0, 0.5, 1]) {
+						_b.lerpVectors(prev, p.pos, t).sub(c.position).applyQuaternion(_qi.copy(c.quaternion).invert());
+						if (Math.abs(_b.x) < 2.2 && _b.y > -0.6 && _b.y < 1.8 && Math.abs(_b.z) < 3.6) {
+							hit = true;
+							break;
+						}
+					}
+					if (hit) {
+						this._hit(c, p, now);
+						dead = true;
+						break;
+					}
+				}
+			}
+			if (dead) {
+				this.group.remove(p.mesh);
+				this.rounds.splice(i, 1);
+			}
+		}
 	}
 
 	// Six spinning barrels under the nose, plus a muzzle flash
@@ -210,6 +254,7 @@ export class WeaponSystem {
 
 	// --- Simulation ------------------------------------------------------------------
 	step(dt, now) {
+		this._stepRounds(dt, now);
 		const L = this.path.length;
 		for (let i = this.projectiles.length - 1; i >= 0; i--) {
 			const p = this.projectiles[i];
@@ -225,7 +270,7 @@ export class WeaponSystem {
 			let dead = p.age > p.life;
 			if (p.kind !== 'mine' && Math.abs(p.x) > this.path.halfWidthAt(p.s) + 0.5) {
 				dead = true;
-				this._blast(p.s, p.x, p.kind === 'round' ? 0.25 : 0.8);
+				this._blast(p.s, p.x, 0.8);
 			}
 			if (!dead) {
 				for (const c of this.crafts) {
@@ -274,7 +319,7 @@ export class WeaponSystem {
 		}
 		if (p.kind === 'round') {
 			c.vf *= 0.985; // a hail of rounds scrubs speed, one by one
-			this._blast(c.s, c.x, 0.35);
+			this._spark(p.pos);
 			this.events.hit?.(c, p.owner, p.kind);
 			if (c.energy <= 0 && !c.eliminated) this.eliminate(c, p.owner);
 			return;
@@ -293,6 +338,13 @@ export class WeaponSystem {
 		this.events.eliminated?.(c, by);
 	}
 
+	_spark(pos) {
+		const sprite = new THREE.Sprite(this.mats.blast.clone());
+		sprite.position.copy(pos);
+		this.group.add(sprite);
+		this.fx.push({ sprite, age: 0, dur: 0.25, size: 1.2 });
+	}
+
 	_blast(s, x, size) {
 		const sprite = new THREE.Sprite(this.mats.blast.clone());
 		this.path.toWorld(s, x, 1.2, sprite.position, this.frame);
@@ -309,14 +361,12 @@ export class WeaponSystem {
 			c.gunModel.flash.visible = c.gun.firing && Math.random() < 0.7;
 			c.gunModel.flash.scale.setScalar(0.8 + Math.random() * 0.8);
 		}
+		for (const p of this.rounds) p.mesh.position.copy(p.pos);
 		for (const p of this.projectiles) {
 			this.path.frameAt(p.s, this.frame);
 			p.mesh.position.copy(this.frame.pos).addScaledVector(this.frame.right, p.x).addScaledVector(this.frame.up, p.h + (p.kind === 'mine' ? Math.sin(now * 3 + p.s) * 0.1 : 0));
 			this.path.quaternionAt(this.frame, p.mesh.quaternion);
-			if (p.kind === 'round') {
-				_q.setFromAxisAngle(_v.set(0, 1, 0), Math.atan2(-p.vx, p.vs));
-				p.mesh.quaternion.multiply(_q);
-			} else if (p.kind !== 'mine') {
+			if (p.kind !== 'mine') {
 				_q.setFromAxisAngle(_v.set(0, 1, 0), Math.atan2(-p.vx, p.vs));
 				p.mesh.quaternion.multiply(_q);
 			} else {
@@ -327,6 +377,8 @@ export class WeaponSystem {
 	}
 
 	dispose() {
+		for (const p of this.rounds) this.group.remove(p.mesh);
+		this.rounds = [];
 		for (const p of this.projectiles) this.group.remove(p.mesh);
 		for (const f of this.fx) this.group.remove(f.sprite);
 		this.projectiles = [];

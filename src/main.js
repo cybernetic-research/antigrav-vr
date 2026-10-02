@@ -713,7 +713,7 @@ function weaponEvents(r) {
 		},
 		gunShot(c) {
 			const n = nearPlayer(c);
-			if (c.isPlayer || n.strength > 0.25) audio.gunShot(c.isPlayer ? 0.8 : n.strength * 0.7, c.isPlayer ? 0 : n.pan);
+			if (c.isPlayer || n.strength > 0.2) audio.gunShot(c.isPlayer ? 1 : n.strength * 0.85, c.isPlayer ? 0 : n.pan);
 		},
 		overheat(c) {
 			if (!c.isPlayer) return;

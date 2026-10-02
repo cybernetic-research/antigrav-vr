@@ -424,20 +424,22 @@ export class Audio {
 		f.frequency.value = 2200 + Math.random() * 600;
 		f.Q.value = 1.2;
 		const g = ctx.createGain();
-		g.gain.setValueAtTime(0.32 * strength, t);
-		g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+		g.gain.setValueAtTime(1.0 * strength, t);
+		g.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
 		src.connect(f).connect(g).connect(p);
 		src.start(t, Math.random());
-		src.stop(t + 0.07);
+		src.stop(t + 0.08);
+		// heavy low thump under each crack
 		const o = ctx.createOscillator();
-		o.frequency.setValueAtTime(140, t);
-		o.frequency.exponentialRampToValueAtTime(60, t + 0.05);
+		o.type = 'triangle';
+		o.frequency.setValueAtTime(170, t);
+		o.frequency.exponentialRampToValueAtTime(45, t + 0.06);
 		const og = ctx.createGain();
-		og.gain.setValueAtTime(0.25 * strength, t);
-		og.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+		og.gain.setValueAtTime(0.9 * strength, t);
+		og.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
 		o.connect(og).connect(p);
 		o.start(t);
-		o.stop(t + 0.07);
+		o.stop(t + 0.09);
 	}
 
 	// a round striking a hull
