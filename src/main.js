@@ -423,9 +423,12 @@ function setupRace(track) {
 		const x = (i % 2 ? 1 : -1) * Math.min(hw * 0.38, 5);
 		const isPlayer = i === total - 1; // start from the back, like the classics
 		const skill = isPlayer ? 1 : 0.93 + 0.07 * (i / Math.max(1, total - 2));
-		// AI pilots are spread over the teams, two liveries per team
-		const team = isPlayer ? playerTeam : TEAMS[i % TEAMS.length];
-		const liveryIndex = isPlayer ? 0 : 1 + (Math.floor(i / TEAMS.length) % (team.liveries.length - 1));
+		// AI pilots are spread over the teams of the same group as the player's
+		// (built-in teams, or e.g. an add-on's teams), using each team's spare liveries
+		const pool = TEAMS.filter((t) => (t.group || 'builtin') === (playerTeam.group || 'builtin'));
+		const team = isPlayer ? playerTeam : pool[i % pool.length];
+		const spare = team.liveries.length - 1;
+		const liveryIndex = isPlayer || spare < 1 ? 0 : 1 + (Math.floor(i / pool.length) % spare);
 		const craft = new Craft(path, shipClass(cls, team), { s, x, skill });
 		craft.baseSkill = skill;
 		craft.isPlayer = isPlayer;
